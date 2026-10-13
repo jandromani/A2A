@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101828">
+  <meta name="description" content="Consola operativa para agentes, flujos, aprobaciones y evidencias.">
+  <title>Agentic Platform</title>
+  <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/" aria-label="Agentic Platform, inicio">
+        <img src="/static/mark.svg" alt="" width="34" height="34">
+        <span><strong>Agentic</strong><small>PLATFORM / A2A</small></span>
+      </a>
+      <div class="environment-pill"><i></i><span id="environment-label">Conectando…</span></div>
+      <nav class="side-nav" aria-label="Navegación principal">
+        <p class="nav-label">OPERACIÓN</p>
+        <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span>Resumen</button>
+        <button class="nav-item" data-view="workflows"><span class="nav-icon">◇</span>Ejecutar flujo</button>
+        <button class="nav-item" data-view="tasks"><span class="nav-icon">▤</span>Tareas</button>
+        <button class="nav-item" data-view="approvals"><span class="nav-icon">✓</span>Aprobaciones <b class="nav-count" id="approval-count">0</b></button>
+        <p class="nav-label nav-spaced">PLATAFORMA</p>
+        <button class="nav-item" data-view="catalog"><span class="nav-icon">▦</span>Catálogo</button>
+        <button class="nav-item" data-view="quality"><span class="nav-icon">◷</span>Evaluación</button>
+        <button class="nav-item" data-view="activity"><span class="nav-icon">≋</span>Auditoría</button>
+        <button class="nav-item" data-view="system"><span class="nav-icon">⚙</span>Sistema</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="user-avatar">A</div>
+        <div class="user-copy"><strong id="actor-name">Administrador local</strong><small id="actor-role">desarrollo</small></div>
+        <button class="icon-button" id="token-button" title="Configurar token API" aria-label="Configurar token">•••</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="menu-button" aria-label="Abrir menú">☰</button>
+        <div class="breadcrumbs"><span>Plataforma</span><b>/</b><strong id="crumb-title">Resumen</strong></div>
+        <div class="top-actions">
+          <span class="top-status"><i></i><span id="health-label">API disponible</span></span>
+          <button class="button button-dark button-small" data-open-workflow>＋ Nueva tarea</button>
+        </div>
+      </header>
+
+      <section class="view active" id="view-overview">
+        <div class="page-heading">
+          <div><p class="eyebrow">CENTRO DE OPERACIONES</p><h1>Resumen</h1><p class="page-subtitle">Estado de las capacidades, tareas y controles de la plataforma.</p></div>
+          <button class="button button-dark" data-open-workflow>＋ Iniciar flujo</button>
+        </div>
+        <div class="metric-grid">
+          <article class="metric-card"><div class="metric-top"><span>Tareas procesadas</span><span class="metric-icon coral">↗</span></div><strong id="metric-tasks">—</strong><small id="metric-tasks-note">Total persistido</small></article>
+          <article class="metric-card"><div class="metric-top"><span>Aprobaciones pendientes</span><span class="metric-icon amber">⏱</span></div><strong id="metric-approvals">—</strong><small>Revisión humana requerida</small></article>
+          <article class="metric-card"><div class="metric-top"><span>Agentes activos</span><span class="metric-icon blue">◇</span></div><strong id="metric-agents">—</strong><small>Capacidades registradas</small></article>
+          <article class="metric-card"><div class="metric-top"><span>Evaluación aprobada</span><span class="metric-icon green">✓</span></div><strong id="metric-quality">—</strong><small id="metric-quality-note">Suite determinista</small></article>
+        </div>
+
+        <div class="section-heading"><div><p class="eyebrow">CAPACIDADES</p><h2>Flujos disponibles</h2></div><button class="text-button" data-view-link="workflows">Ver todos <span>→</span></button></div>
+        <div class="workflow-grid">
+          <button class="workflow-card" data-run-scenario="knowledge">
+            <span class="workflow-symbol symbol-coral">⌕</span><span class="workflow-card-title">Conocimiento corporativo</span>
+            <span class="workflow-card-copy">Busca en fuentes autorizadas y entrega una respuesta con citas.</span>
+            <span class="workflow-meta"><i class="dot green-dot"></i>Lectura con evidencia <b>→</b></span>
+          </button>
+          <button class="workflow-card" data-run-scenario="report">
+            <span class="workflow-symbol symbol-blue">▤</span><span class="workflow-card-title">Inventario técnico</span>
+            <span class="workflow-card-copy">Extrae versiones y dependencias de archivos de configuración.</span>
+            <span class="workflow-meta"><i class="dot green-dot"></i>Solo lectura <b>→</b></span>
+          </button>
+          <button class="workflow-card" data-run-scenario="incident">
+            <span class="workflow-symbol symbol-amber">⚑</span><span class="workflow-card-title">Incidencia operativa</span>
+            <span class="workflow-card-copy">Prepara una propuesta y detiene cualquier escritura para revisión.</span>
+            <span class="workflow-meta"><i class="dot amber-dot"></i>Requiere aprobación <b>→</b></span>
+          </button>
+        </div>
+
+        <div class="content-grid">
+          <section class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">ACTIVIDAD RECIENTE</p><h2>Últimas tareas</h2></div><button class="text-button" data-view-link="tasks">Ver tareas →</button></div>
+            <div class="table-wrap"><table><thead><tr><th>FLUJO</th><th>ESTADO</th><th>INICIADO</th><th></th></tr></thead><tbody id="recent-tasks"><tr><td colspan="4" class="loading-row">Cargando actividad…</td></tr></tbody></table></div>
+          </section>
+          <section class="panel stack-panel">
+            <div class="panel-heading"><div><p class="eyebrow">CONTROL Y CONFIANZA</p><h2>Controles activos</h2></div><span class="small-check">✓</span></div>
+            <div class="control-row"><span class="control-mark">01</span><div><strong>Permisos por alcance</strong><small>Fuentes filtradas por identidad</small></div><span class="control-state">Activo</span></div>
+            <div class="control-row"><span class="control-mark">02</span><div><strong>Evaluación determinista</strong><small>Evidencia y reglas antes de entregar</small></div><span class="control-state">Activo</span></div>
+            <div class="control-row"><span class="control-mark">03</span><div><strong>Aprobación humana</strong><small>Acciones externas detenidas hasta decidir</small></div><span class="control-state">Activo</span></div>
+            <div class="control-row"><span class="control-mark">04</span><div><strong>Auditoría de tareas</strong><small>Decisiones y transiciones persistidas</small></div><span class="control-state">Activo</span></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-workflows">
+        <div class="page-heading">
+          <div><p class="eyebrow">ORQUESTACIÓN</p><h1>Ejecutar un flujo</h1><p class="page-subtitle">Cada recorrido conserva contexto, permisos, resultados y evaluación.</p></div>
+        </div>
+        <div class="execution-layout">
+          <form class="panel task-form" id="task-form">
+            <div class="panel-heading"><div><p class="eyebrow">NUEVA EJECUCIÓN</p><h2>Configura la petición</h2></div><span class="step-badge">01 / 03</span></div>
+            <label for="scenario">Flujo de trabajo</label>
+            <select id="scenario" name="scenario">
+              <option value="knowledge">Conocimiento corporativo</option>
+              <option value="report">Inventario técnico</option>
+              <option value="incident">Incidencia operativa</option>
+            </select>
+            <label for="message" id="message-label">Pregunta</label>
+            <textarea id="message" name="message" rows="5" required></textarea>
+            <div class="field-hint" id="message-hint"></div>
+            <div class="field-group" id="report-files">
+              <label for="files">Archivos de configuración</label>
+              <input type="file" id="files" multiple accept=".xml,.json,.yml,.yaml,.toml,.txt,.gradle,.kts">
+              <small>Se leen como texto y no se ejecutan. Máximo 10 archivos / 300 KB en total.</small>
+            </div>
+            <div class="field-group hidden" id="incident-fields">
+              <label for="issue-key">Clave de Jira (opcional)</label>
+              <input type="text" id="issue-key" placeholder="OPS-123">
+              <small>Si se configura una clave, Jira se consulta en vivo. Si se deja vacío, se usa un caso sintético local.</small>
+            </div>
+            <div class="form-foot"><span><i class="dot green-dot"></i> El estado y la evidencia se guardan en el registro de tareas.</span><button class="button button-dark" id="submit-task" type="submit">Ejecutar flujo <span>→</span></button></div>
+            <div id="form-error" class="form-error hidden"></div>
+          </form>
+          <aside class="panel run-aside">
+            <p class="eyebrow">RECORRIDO DE EJECUCIÓN</p><h2>Con controles por etapa</h2>
+            <div class="run-step"><span class="run-step-number">1</span><div><strong>Identidad y alcance</strong><small>Autoriza operación y fuentes</small></div></div>
+            <div class="run-step"><span class="run-step-number">2</span><div><strong>Herramientas y datos</strong><small>Consulta o extrae hechos</small></div></div>
+            <div class="run-step"><span class="run-step-number">3</span><div><strong>Evaluación</strong><small>Comprueba evidencia y restricciones</small></div></div>
+            <div class="run-step"><span class="run-step-number">4</span><div><strong>Registro o aprobación</strong><small>Persiste resultado, eventos y decisiones</small></div></div>
+            <div class="note-box"><strong>Las acciones tienen límites.</strong><p>El agente de incidencias prepara un borrador. Para publicar un comentario en Jira se necesita aprobarlo desde la cola.</p></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-tasks">
+        <div class="page-heading"><div><p class="eyebrow">EJECUCIONES</p><h1>Tareas</h1><p class="page-subtitle">Estado actual, resultado, procedencia y eventos de cada recorrido.</p></div><button class="button button-dark" data-open-workflow>＋ Nueva tarea</button></div>
+        <section class="panel"><div class="panel-heading"><div><p class="eyebrow">REGISTRO PERSISTENTE</p><h2>Todas las tareas</h2></div><button class="icon-button" id="refresh-tasks" aria-label="Actualizar">↻</button></div><div id="tasks-list" class="task-list"><div class="empty-state">Cargando tareas…</div></div></section>
+      </section>
+
+      <section class="view" id="view-approvals">
+        <div class="page-heading"><div><p class="eyebrow">HUMAN IN THE LOOP</p><h1>Aprobaciones</h1><p class="page-subtitle">Revisa la propuesta, su fuente y el efecto antes de decidir.</p></div></div>
+        <div class="approval-banner"><span class="banner-icon">!</span><div><strong>La aprobación no amplía permisos</strong><p>Una decisión autoriza solo el borrador y la operación mostrados en esta ficha.</p></div></div>
+        <div id="approvals-list" class="approval-list"><div class="empty-state">Cargando aprobaciones…</div></div>
+      </section>
+
+      <section class="view" id="view-catalog">
+        <div class="page-heading"><div><p class="eyebrow">CAPACIDADES REUTILIZABLES</p><h1>Catálogo</h1><p class="page-subtitle">Agentes, flujos y herramientas registrados por versión y responsabilidad.</p></div></div>
+        <div class="catalog-tabs"><button class="catalog-tab active" data-catalog-kind="all">Todo</button><button class="catalog-tab" data-catalog-kind="agent">Agentes</button><button class="catalog-tab" data-catalog-kind="workflow">Flujos</button><button class="catalog-tab" data-catalog-kind="tool">Herramientas</button></div>
+        <div id="catalog-list" class="catalog-grid"><div class="empty-state">Cargando catálogo…</div></div>
+        <div class="section-heading section-spaced"><div><p class="eyebrow">CONTEXTO AUTORIZADO</p><h2>Fuentes de conocimiento</h2></div><span class="data-pill">Alcance aplicado en cada búsqueda</span></div>
+        <div id="knowledge-list" class="knowledge-grid"><div class="empty-state">Cargando fuentes…</div></div>
+      </section>
+
+      <section class="view" id="view-quality">
+        <div class="page-heading"><div><p class="eyebrow">EVALUACIÓN</p><h1>Calidad y pruebas</h1><p class="page-subtitle">Criterios deterministas ejecutados con cada tarea.</p></div></div>
+        <div class="quality-overview" id="quality-overview"></div>
+        <section class="panel"><div class="panel-heading"><div><p class="eyebrow">RESULTADOS POR TAREA</p><h2>Últimas evaluaciones</h2></div></div><div id="evaluations-list" class="evaluation-list"><div class="empty-state">Cargando evaluaciones…</div></div></section>
+      </section>
+
+      <section class="view" id="view-activity">
+        <div class="page-heading"><div><p class="eyebrow">TRAZABILIDAD</p><h1>Auditoría</h1><p class="page-subtitle">Acciones, identidad, decisión y objeto afectado.</p></div></div>
+        <section class="panel"><div class="panel-heading"><div><p class="eyebrow">REGISTRO INMUTABLE DE APLICACIÓN</p><h2>Actividad reciente</h2></div><button class="icon-button" id="refresh-activity" aria-label="Actualizar">↻</button></div><div id="activity-list" class="audit-list"><div class="empty-state">Cargando actividad…</div></div></section>
+      </section>
+
+      <section class="view" id="view-system">
+        <div class="page-heading"><div><p class="eyebrow">PLANO DE CONTROL</p><h1>Sistema</h1><p class="page-subtitle">Estado de almacenamiento, protocolos, modelos y conectores.</p></div></div>
+        <div id="system-overview" class="system-grid"><div class="empty-state">Comprobando servicios…</div></div>
+        <section class="panel protocol-panel"><div class="panel-heading"><div><p class="eyebrow">INTEROPERABILIDAD</p><h2>Interfaces expuestas</h2></div></div><div class="protocol-row"><span class="protocol-mark">A2A</span><div><strong>Agent Card y tareas JSON-RPC</strong><small><code>/.well-known/agent-card.json</code> · <code>/a2a</code> · tareas, consulta y cancelación</small></div><span class="control-state">Disponible</span></div><div class="protocol-row"><span class="protocol-mark mcp">MCP</span><div><strong>Streamable HTTP, herramientas y recursos</strong><small><code>/mcp</code> · initialize · tools/list · tools/call · resources/read</small></div><span class="control-state">Disponible</span></div></section>
+        <section class="panel connector-panel"><div class="panel-heading"><div><p class="eyebrow">HUB DE INTEGRACIONES</p><h2>Conectores A2A y MCP</h2></div><button class="icon-button" id="refresh-connectors" aria-label="Actualizar conectores">↻</button></div>
+          <p class="connector-intro">Registra otros agentes A2A y servidores MCP. La dirección se guarda como configuración; las claves se leen del entorno mediante el nombre de variable.</p>
+          <div id="connectors-list" class="connector-list"><div class="empty-state">Cargando conectores…</div></div>
+          <details class="connector-register"><summary>Registrar un conector</summary>
+            <form id="connector-form" class="connector-form">
+              <label for="connector-kind">Protocolo</label><select id="connector-kind"><option value="a2a">A2A · agente remoto</option><option value="mcp">MCP · servidor de herramientas</option></select>
+              <div class="mcp-version-label"><label for="connector-version">Versión MCP preferida</label></div><div class="mcp-version-control"><select id="connector-version"><option value="2026-07-28">2026-07-28 · actual</option><option value="2025-11-25">2025-11-25 · compatible</option></select></div>
+              <label for="connector-name">Nombre</label><input id="connector-name" required maxlength="180" placeholder="Agente de soporte">
+              <label for="connector-endpoint">URL del endpoint</label><input id="connector-endpoint" required type="url" placeholder="https://agente.example.com/a2a">
+              <label for="connector-auth-env">Variable de entorno del bearer token</label><input id="connector-auth-env" maxlength="120" placeholder="SUPPORT_AGENT_TOKEN">
+              <label for="connector-description">Descripción</label><input id="connector-description" maxlength="4000" placeholder="Qué capacidad ofrece y qué datos necesita">
+              <div class="form-foot"><span>El valor del token nunca se guarda en la base de datos.</span><button class="button button-dark button-small" type="submit">Registrar</button></div>
+              <div id="connector-error" class="form-error hidden"></div>
+            </form>
+          </details>
+        </section>
+        <section class="panel token-panel"><div class="panel-heading"><div><p class="eyebrow">ACCESO DE CONSOLA</p><h2>Token API</h2></div></div><p>En modo local no hace falta. Si despliegas con autenticación por token, guárdalo aquí para las llamadas desde este navegador.</p><div class="token-form"><input type="password" id="api-token" placeholder="Bearer token"><button class="button button-dark button-small" id="save-token">Guardar token</button><button class="button button-light button-small" id="clear-token">Borrar</button></div><small>El token queda en el almacenamiento local de este navegador.</small></section>
+      </section>
+
+      <footer class="app-footer"><span>Agentic Platform <b>·</b> A2A</span><span id="footer-status">Estado pendiente</span></footer>
+    </main>
+  </div>
+
+  <div class="modal-backdrop hidden" id="task-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card"><div class="modal-header"><div><p class="eyebrow">DETALLE DE EJECUCIÓN</p><h2 id="modal-title">Tarea</h2></div><button class="icon-button" id="close-modal" aria-label="Cerrar">×</button></div><div id="modal-body"></div></div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

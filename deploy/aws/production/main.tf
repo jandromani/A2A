@@ -40,9 +40,9 @@ resource "aws_subnet" "public" {
   cidr_block              = each.value
   map_public_ip_on_launch = true
   tags = merge(local.tags, {
-    Name                              = "${var.name}-public-${each.key}"
+    Name                                = "${var.name}-public-${each.key}"
     "kubernetes.io/cluster/${var.name}" = "shared"
-    "kubernetes.io/role/elb"          = "1"
+    "kubernetes.io/role/elb"            = "1"
   })
 }
 
@@ -255,7 +255,7 @@ resource "aws_eks_node_group" "platform" {
 }
 
 resource "aws_eks_addon" "core" {
-  for_each = toset(["vpc-cni", "coredns", "kube-proxy", "metrics-server"])
+  for_each                    = toset(["vpc-cni", "coredns", "kube-proxy", "metrics-server"])
   cluster_name                = aws_eks_cluster.platform.name
   addon_name                  = each.value
   resolve_conflicts_on_update = "PRESERVE"
@@ -333,9 +333,9 @@ resource "aws_iam_role" "efs_csi" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Federated = aws_iam_openid_connect_provider.eks.arn }
-      Action = "sts:AssumeRoleWithWebIdentity"
+      Action    = "sts:AssumeRoleWithWebIdentity"
       Condition = { StringEquals = {
         "${local.oidc_host}:aud" = "sts.amazonaws.com"
         "${local.oidc_host}:sub" = "system:serviceaccount:kube-system:efs-csi-controller-sa"
@@ -477,36 +477,36 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
 }
 
 resource "aws_db_instance" "platform" {
-  identifier                  = "${var.name}-postgres"
-  engine                      = "postgres"
-  engine_version              = var.postgres_engine_version
-  instance_class              = var.database_instance_class
-  allocated_storage           = var.database_storage_gb
-  max_allocated_storage       = 2048
-  storage_type                = "gp3"
-  storage_encrypted           = true
-  kms_key_id                  = aws_kms_key.rds.arn
-  db_name                     = var.database_name
-  username                    = var.database_admin_username
-  password                    = var.database_admin_password
-  port                        = 5432
-  multi_az                    = true
-  publicly_accessible         = false
-  db_subnet_group_name        = aws_db_subnet_group.platform.name
-  vpc_security_group_ids      = [aws_security_group.rds.id]
-  parameter_group_name        = aws_db_parameter_group.platform.name
-  backup_retention_period     = var.backup_retention_days
-  backup_window               = "03:00-03:30"
-  maintenance_window          = "sun:04:00-sun:05:00"
-  auto_minor_version_upgrade  = true
-  copy_tags_to_snapshot       = true
-  deletion_protection         = true
-  skip_final_snapshot         = false
-  final_snapshot_identifier   = "${var.name}-final"
+  identifier                   = "${var.name}-postgres"
+  engine                       = "postgres"
+  engine_version               = var.postgres_engine_version
+  instance_class               = var.database_instance_class
+  allocated_storage            = var.database_storage_gb
+  max_allocated_storage        = 2048
+  storage_type                 = "gp3"
+  storage_encrypted            = true
+  kms_key_id                   = aws_kms_key.rds.arn
+  db_name                      = var.database_name
+  username                     = var.database_admin_username
+  password                     = var.database_admin_password
+  port                         = 5432
+  multi_az                     = true
+  publicly_accessible          = false
+  db_subnet_group_name         = aws_db_subnet_group.platform.name
+  vpc_security_group_ids       = [aws_security_group.rds.id]
+  parameter_group_name         = aws_db_parameter_group.platform.name
+  backup_retention_period      = var.backup_retention_days
+  backup_window                = "03:00-03:30"
+  maintenance_window           = "sun:04:00-sun:05:00"
+  auto_minor_version_upgrade   = true
+  copy_tags_to_snapshot        = true
+  deletion_protection          = true
+  skip_final_snapshot          = false
+  final_snapshot_identifier    = "${var.name}-final"
   performance_insights_enabled = true
-  monitoring_interval         = 60
-  monitoring_role_arn         = aws_iam_role.rds_monitoring.arn
-  apply_immediately           = false
+  monitoring_interval          = 60
+  monitoring_role_arn          = aws_iam_role.rds_monitoring.arn
+  apply_immediately            = false
   lifecycle { prevent_destroy = true }
   depends_on = [aws_iam_role_policy_attachment.rds_monitoring]
   tags       = merge(local.tags, { Name = "${var.name}-postgres" })
@@ -825,8 +825,8 @@ resource "aws_iam_role_policy" "audit_archiver" {
         Resource = ["${aws_s3_bucket.archive.arn}/a2a/production/audit/*"]
       },
       {
-        Effect = "Allow"
-        Action = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
         Resource = [aws_kms_key.s3.arn]
       }
     ]

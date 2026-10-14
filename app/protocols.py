@@ -42,10 +42,15 @@ def a2a_agent_card(public_url: str, config: Settings | None = None) -> dict[str,
         ),
         "supportedInterfaces": [
             {
+                "url": f"{public_url.rstrip('/')}/a2a-sdk/",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": A2A_PROTOCOL_VERSION,
+            },
+            {
                 "url": f"{public_url.rstrip('/')}/a2a",
                 "protocolBinding": "JSONRPC",
                 "protocolVersion": A2A_PROTOCOL_VERSION,
-            }
+            },
         ],
         "version": "0.1.0",
         "capabilities": {
@@ -339,6 +344,21 @@ def handle_mcp(
         )
     if method == "ping":
         return 200, _rpc_result(request_id, {})
+    if method == "server/discover":
+        return 200, _rpc_result(
+            request_id,
+            {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "resources": {"listChanged": False, "subscribe": False},
+                },
+                "instructions": (
+                    "Use run_agent_workflow for an end-to-end task. Check task status and "
+                    "approval state before describing any external side effect."
+                ),
+            },
+        )
     if method == "tools/list":
         return 200, _rpc_result(request_id, {"tools": mcp_tools()})
     if method == "resources/list":

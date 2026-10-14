@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: a2a-platform
+  namespace: a2a
+data:
+  APP_NAME: Agentic Platform
+  ENVIRONMENT: production
+  PUBLIC_URL: "@@PUBLIC_URL@@"
+  AUTH_MODE: oidc
+  OIDC_ISSUER_URL: "@@OIDC_ISSUER_URL@@"
+  OIDC_AUDIENCE: a2a-api
+  AGENT_IDENTITY_CLAIM: agentic_agent_id
+  SECRET_PROVIDER: vault
+  VAULT_ADDR: "@@VAULT_ADDR@@"
+  VAULT_KUBERNETES_ROLE: a2a-runtime
+  VAULT_KUBERNETES_MOUNT: kubernetes
+  VAULT_KV_MOUNT: secret
+  VAULT_CACHE_TTL_SECONDS: "60"
+  OPA_URL: http://opa.a2a.svc.cluster.local:8181
+  CONNECTOR_ALLOWED_HOSTS: "@@CONNECTOR_ALLOWED_HOSTS@@"
+  DATABASE_URL: vault://a2a/production/database#url
+  REDIS_URL: vault://a2a/production/valkey#url
+  EVENT_WORKER_ENABLED: "false"
+  EVENT_CONSUMER_GROUP: a2a-workers
+  EVENT_CONSUMER_NAME: api
+  TASK_EXECUTION_MODE: queue
+  MODEL_PROVIDER: openai-compatible
+  MODEL_BASE_URL: "@@MODEL_BASE_URL@@"
+  MODEL_NAME: "@@MODEL_NAME@@"
+  MODEL_API_KEY: vault://a2a/production/providers/model#api_key
+  MODEL_MAX_TOKENS: "1200"
+  MODEL_INPUT_COST_PER_MILLION: "0.40"
+  MODEL_OUTPUT_COST_PER_MILLION: "1.60"
+  OPENAI_API_KEY: vault://a2a/production/providers/model#api_key
+  LANGFUSE_HOST: "@@LANGFUSE_HOST@@"
+  LANGFUSE_PUBLIC_KEY: vault://a2a/production/observability/langfuse#public_key
+  LANGFUSE_SECRET_KEY: vault://a2a/production/observability/langfuse#secret_key
+  OLLAMA_BASE_URL: http://ollama:11434/v1
+  EMBEDDING_PROVIDER: openai-compatible
+  EMBEDDING_BASE_URL: "@@EMBEDDING_BASE_URL@@"
+  EMBEDDING_API_KEY: vault://a2a/production/providers/model#api_key
+  EMBEDDING_MODEL: "@@EMBEDDING_MODEL@@"
+  JIRA_BASE_URL: "@@JIRA_BASE_URL@@"
+  JIRA_EMAIL: "@@JIRA_EMAIL@@"
+  JIRA_API_TOKEN: vault://a2a/production/integrations/jira#api_token
+  GITHUB_TOKEN: vault://a2a/production/integrations/github#token
+  GOOGLE_CLIENT_ID: vault://a2a/production/integrations/gmail#client_id
+  GOOGLE_CLIENT_SECRET: vault://a2a/production/integrations/gmail#client_secret
+  GOOGLE_REFRESH_TOKEN: vault://a2a/production/integrations/gmail#refresh_token
+  DATA_LAKE_ROOT: /var/lib/a2a/lake
+  MQTT_TOPIC_FILTER: a2a/telemetry/+/events
+  MQTT_MAX_MESSAGE_BYTES: "256000"

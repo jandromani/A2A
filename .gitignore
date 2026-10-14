@@ -14,4 +14,14 @@ data/*.db
 data/*.sqlite*
 *.log
 dist/
+production.env
+backend.hcl
+terraform.tfvars
+*.tfvars
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform/
+.secrets/
+*.egg-info/
 build/

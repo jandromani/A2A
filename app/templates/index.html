@@ -5,9 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#101828">
   <meta name="description" content="Consola operativa para agentes, flujos, aprobaciones y evidencias.">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Agentic Platform</title>
   <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/integrations.css">
 </head>
 <body>
   <div class="app-shell">
@@ -107,6 +112,7 @@
               <option value="incident">Incidencia operativa</option>
             </select>
             <label for="message" id="message-label">Pregunta</label>
+            <div class="conversation-context"><span>Memoria duradera en este navegador · <code id="conversation-context-id"></code></span><button class="text-button" id="new-conversation" type="button">Nueva conversación</button></div>
             <textarea id="message" name="message" rows="5" required></textarea>
             <div class="field-hint" id="message-hint"></div>
             <div class="field-group" id="report-files">
@@ -131,6 +137,16 @@
             <div class="note-box"><strong>Las acciones tienen límites.</strong><p>El agente de incidencias prepara un borrador. Para publicar un comentario en Jira se necesita aprobarlo desde la cola.</p></div>
           </aside>
         </div>
+        <section class="panel custom-workflows-panel">
+          <div class="panel-heading"><div><p class="eyebrow">FLUJOS CONFIGURABLES</p><h2>Amplía los casos de uso</h2></div><button class="icon-button" id="refresh-custom-workflows" aria-label="Actualizar flujos configurables">↻</button></div>
+          <p class="connector-intro">Define secuencias seguras con búsqueda autorizada, generación, conectores y puntos de aprobación. Los flujos se guardan con versión y dejan checkpoints reanudables.</p>
+          <div id="custom-workflow-list" class="custom-workflow-list"><div class="empty-state">Cargando flujos configurables…</div></div>
+          <details class="custom-workflow-editor"><summary>Crear o actualizar un flujo (JSON)</summary>
+            <textarea id="custom-workflow-definition" rows="18" spellcheck="false"></textarea>
+            <div class="form-foot"><span>Solo las acciones declaradas en el esquema se pueden ejecutar.</span><button class="button button-dark button-small" id="save-custom-workflow" type="button">Guardar definición</button></div>
+            <div id="custom-workflow-error" class="form-error hidden"></div>
+          </details>
+        </section>
       </section>
 
       <section class="view" id="view-tasks">
@@ -169,19 +185,19 @@
       <section class="view" id="view-quality">
         <div class="page-heading"><div><p class="eyebrow">EVALUACIÓN Y USO</p><h1>Calidad y consumo</h1><p class="page-subtitle">Resultados deterministas y consumo agregado de modelos, sin guardar prompts ni respuestas del proveedor.</p></div></div>
         <div class="quality-overview" id="quality-overview"></div>
-        <section class="panel model-usage-panel"><div class="panel-heading"><div><p class="eyebrow">CONSUMO POR PROVEEDOR</p><h2>Ventana de las últimas 1.000 tareas</h2></div><span class="data-pill">Tokens · fallbacks · coste estimado</span></div><div id="model-usage-detail" class="model-usage-detail"><div class="empty-state">Cargando consumo de modelos…</div></div></section>
+        <section class="panel model-usage-panel"><div class="panel-heading"><div><p class="eyebrow">CONSUMO POR PROVEEDOR</p><h2>Histórico completo de llamadas</h2></div><span class="data-pill">Ledger · tokens · fallbacks · coste estimado</span></div><div id="model-usage-detail" class="model-usage-detail"><div class="empty-state">Cargando consumo de modelos…</div></div></section>
         <section class="panel"><div class="panel-heading"><div><p class="eyebrow">RESULTADOS POR TAREA</p><h2>Últimas evaluaciones</h2></div></div><div id="evaluations-list" class="evaluation-list"><div class="empty-state">Cargando evaluaciones…</div></div></section>
       </section>
 
       <section class="view" id="view-activity">
         <div class="page-heading"><div><p class="eyebrow">TRAZABILIDAD</p><h1>Auditoría</h1><p class="page-subtitle">Acciones, identidad, decisión y objeto afectado.</p></div></div>
-        <section class="panel"><div class="panel-heading"><div><p class="eyebrow">REGISTRO INMUTABLE DE APLICACIÓN</p><h2>Actividad reciente</h2></div><button class="icon-button" id="refresh-activity" aria-label="Actualizar">↻</button></div><div id="activity-list" class="audit-list"><div class="empty-state">Cargando actividad…</div></div></section>
+        <section class="panel"><div class="panel-heading"><div><p class="eyebrow">CADENA HASH · REGISTRO APPEND-ONLY</p><h2>Actividad reciente</h2></div><div class="top-actions"><span id="audit-chain-status" class="data-pill">Verificando cadena…</span><button class="icon-button" id="refresh-activity" aria-label="Actualizar">↻</button></div></div><div id="activity-list" class="audit-list"><div class="empty-state">Cargando actividad…</div></div></section>
       </section>
 
       <section class="view" id="view-system">
         <div class="page-heading"><div><p class="eyebrow">PLANO DE CONTROL</p><h1>Sistema</h1><p class="page-subtitle">Estado de almacenamiento, protocolos, modelos y conectores.</p></div></div>
         <div id="system-overview" class="system-grid"><div class="empty-state">Comprobando servicios…</div></div>
-        <section class="panel protocol-panel"><div class="panel-heading"><div><p class="eyebrow">INTEROPERABILIDAD</p><h2>Interfaces expuestas</h2></div></div><div class="protocol-row"><span class="protocol-mark">A2A</span><div><strong>Agent Card y tareas JSON-RPC</strong><small><code>/.well-known/agent-card.json</code> · <code>/a2a</code> · tareas, consulta y cancelación</small></div><span class="control-state">Disponible</span></div><div class="protocol-row"><span class="protocol-mark mcp">MCP</span><div><strong>Streamable HTTP, herramientas y recursos</strong><small><code>/mcp</code> · initialize · tools/list · tools/call · resources/read</small></div><span class="control-state">Disponible</span></div></section>
+        <section class="panel protocol-panel"><div class="panel-heading"><div><p class="eyebrow">INTEROPERABILIDAD</p><h2>Interfaces expuestas</h2></div></div><div class="protocol-row"><span class="protocol-mark">A2A</span><div><strong>Agent Card y tareas con el SDK oficial</strong><small><code>/.well-known/agent-card.json</code> · <code>/a2a-sdk/</code> · compatibilidad: <code>/a2a</code></small></div><span class="control-state">Disponible</span></div><div class="protocol-row"><span class="protocol-mark mcp">MCP</span><div><strong>Streamable HTTP con el SDK oficial</strong><small><code>/mcp-sdk/</code> · tools/list · tools/call · resources/read · compatibilidad: <code>/mcp</code></small></div><span class="control-state">Disponible</span></div></section>
         <section class="panel connector-panel"><div class="panel-heading"><div><p class="eyebrow">HUB DE INTEGRACIONES</p><h2>Conectores A2A y MCP</h2></div><button class="icon-button" id="refresh-connectors" aria-label="Actualizar conectores">↻</button></div>
           <p class="connector-intro">Registra otros agentes A2A y servidores MCP. La dirección se guarda como configuración; las claves se leen del entorno mediante el nombre de variable.</p>
           <div id="connectors-list" class="connector-list"><div class="empty-state">Cargando conectores…</div></div>
@@ -197,6 +213,55 @@
               <div id="connector-error" class="form-error hidden"></div>
             </form>
           </details>
+        </section>
+        <section class="panel data-sources-panel"><div class="panel-heading"><div><p class="eyebrow">DATOS Y PIPELINES</p><h2>Fuentes REST, CRM, ERP y lake</h2></div><button class="icon-button" id="refresh-data-sources" aria-label="Actualizar fuentes de datos">↻</button></div>
+          <p class="connector-intro">Registra APIs o archivos CSV/Parquet. Los secretos se inyectan por nombre de variable; las rutas del lake quedan confinadas a <code>DATA_LAKE_ROOT</code>.</p>
+          <div id="data-sources-list" class="connector-list"><div class="empty-state">Cargando fuentes de datos…</div></div>
+          <details class="connector-register"><summary>Registrar una fuente</summary>
+            <form id="data-source-form" class="connector-form">
+              <label for="data-source-kind">Tipo</label><select id="data-source-kind"><option value="rest">REST</option><option value="crm">CRM</option><option value="erp">ERP</option><option value="data_lake">Data lake</option></select>
+              <label for="data-source-name">Nombre</label><input id="data-source-name" required maxlength="180" placeholder="CRM comercial">
+              <label for="data-source-endpoint">URL API o ruta del lake</label><input id="data-source-endpoint" required maxlength="1000" placeholder="https://crm.example/api/records">
+              <label for="data-source-auth">Variable del bearer token (opcional)</label><input id="data-source-auth" maxlength="120" pattern="[A-Z][A-Z0-9_]*" placeholder="CRM_ACCESS_TOKEN">
+              <label for="data-source-scope">Alcance de acceso</label><input id="data-source-scope" required maxlength="80" placeholder="commercial">
+              <label for="data-source-format">Formato</label><select id="data-source-format"><option value="json">JSON</option><option value="odata">OData</option><option value="csv">CSV</option><option value="parquet">Parquet</option></select>
+              <label for="data-source-options">Mapeo y límites (JSON)</label><textarea id="data-source-options" rows="5" spellcheck="false">{"records_path":"records","title_field":"name","id_field":"id","content_fields":["description"],"max_pages":5,"max_records":500}</textarea>
+              <div class="form-foot"><span>Los pipelines en tiempo real envían lotes a <code>/api/v1/data-sources/{id}/events</code>.</span><button class="button button-dark button-small" type="submit">Registrar fuente</button></div>
+              <div id="data-source-error" class="form-error hidden"></div>
+            </form>
+          </details>
+        </section>
+        <section class="panel integrations-panel"><div class="panel-heading"><div><p class="eyebrow">INTEGRACIONES PROPIAS</p><h2>GitHub y Gmail</h2></div></div>
+          <div class="integration-grid">
+            <article class="integration-card"><h3>GitHub · incidencias</h3>
+              <form id="github-search-form" class="connector-form">
+                <label for="github-owner">Owner</label><input id="github-owner" required maxlength="100" placeholder="acme">
+                <label for="github-repository">Repositorio</label><input id="github-repository" required maxlength="100" placeholder="platform">
+                <label for="github-state">Estado</label><select id="github-state"><option value="open">Abiertas</option><option value="closed">Cerradas</option><option value="all">Todas</option></select>
+                <div class="form-foot"><span>Lectura sujeta al alcance GitHub del usuario.</span><button class="button button-light button-small" type="submit">Buscar</button></div>
+              </form>
+              <div id="github-issues-list" class="integration-results"><div class="empty-state">Busca incidencias para empezar.</div></div>
+              <form id="github-comment-form" class="connector-form integration-write-form">
+                <label for="github-issue-number">Número de incidencia</label><input id="github-issue-number" required inputmode="numeric" pattern="[1-9][0-9]*" placeholder="42">
+                <label for="github-comment-body">Comentario</label><textarea id="github-comment-body" rows="3" required maxlength="12000" placeholder="Borrador que revisará una persona"></textarea>
+                <div class="form-foot"><span>Publicar requiere aprobación humana.</span><button class="button button-dark button-small" type="submit">Solicitar aprobación</button></div>
+              </form>
+            </article>
+            <article class="integration-card"><h3>Gmail · mensajes</h3>
+              <form id="gmail-search-form" class="connector-form">
+                <label for="gmail-query">Búsqueda</label><input id="gmail-query" required maxlength="500" placeholder="from:proveedor@example.com">
+                <div class="form-foot"><span>Solo lectura con OAuth configurado.</span><button class="button button-light button-small" type="submit">Buscar</button></div>
+              </form>
+              <div id="gmail-messages-list" class="integration-results"><div class="empty-state">Busca mensajes para empezar.</div></div>
+              <div id="gmail-message-detail" class="integration-results"></div>
+              <form id="gmail-send-form" class="connector-form integration-write-form">
+                <label for="gmail-to">Destinatarios (separados por coma)</label><input id="gmail-to" required maxlength="2000" placeholder="persona@example.com">
+                <label for="gmail-subject">Asunto</label><input id="gmail-subject" required maxlength="500" placeholder="Asunto del correo">
+                <label for="gmail-body">Mensaje</label><textarea id="gmail-body" rows="3" required maxlength="100000" placeholder="Borrador que revisará una persona"></textarea>
+                <div class="form-foot"><span>Enviar requiere aprobación humana.</span><button class="button button-dark button-small" type="submit">Solicitar aprobación</button></div>
+              </form>
+            </article>
+          </div>
         </section>
         <section class="panel token-panel"><div class="panel-heading"><div><p class="eyebrow">ACCESO DE CONSOLA</p><h2>Token API</h2></div></div><p>En modo local no hace falta. Si despliegas con autenticación por token, guárdalo aquí para las llamadas desde este navegador.</p><div class="token-form"><input type="password" id="api-token" placeholder="Bearer token"><button class="button button-dark button-small" id="save-token">Guardar token</button><button class="button button-light button-small" id="clear-token">Borrar</button></div><small>El token queda en el almacenamiento local de este navegador.</small></section>
       </section>

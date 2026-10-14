@@ -12,9 +12,23 @@ ROLE_ACTIONS = {
     "knowledge.write": {"admin"},
     "catalog.manage": {"admin"},
     "connector.invoke": {"approver", "admin"},
+    "connector.read": {"operator", "approver", "admin"},
     "approval.decide": {"approver", "admin"},
+    "approval.read": {"approver", "admin"},
     "audit.read": {"operator", "approver", "admin"},
     "evaluation.read": {"operator", "approver", "admin"},
+    "usage.read": {"operator", "approver", "admin"},
+    "data.source.manage": {"admin"},
+    "data.source.read": {"operator", "approver", "admin"},
+    "data.source.sync": {"operator", "admin"},
+    "data.source.write": {"operator", "admin"},
+    "workflow.manage": {"admin"},
+    "identity.manage": {"admin"},
+    "workflow.run": {"employee", "operator", "admin"},
+    "integration.github.read": {"employee", "operator", "approver", "admin"},
+    "integration.github.request_write": {"employee", "operator", "approver", "admin"},
+    "integration.gmail.read": {"employee", "operator", "approver", "admin"},
+    "integration.gmail.request_send": {"employee", "operator", "approver", "admin"},
 }
 
 

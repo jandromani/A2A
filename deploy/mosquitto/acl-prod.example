@@ -1,0 +1,7 @@
+# Create unique credentials with mosquitto_passwd. Grant each device only its own topic.
+user device-7
+topic write a2a/telemetry/device-7/events
+
+# The platform ingress account can read telemetry only.
+user a2a-platform-ingress
+topic read a2a/telemetry/+/events

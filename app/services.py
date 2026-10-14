@@ -10,6 +10,7 @@ from app.config import Settings
 from app.embeddings import embedding_for
 from app.event_bus import publish_event, write_audit
 from app.jira import JiraConnector, JiraConnectorError
+from app.memory import read_conversation_context, save_conversation_exchange
 from app.models import (
     ApprovalRecord,
     AuditRecord,
@@ -58,6 +59,7 @@ def serialize_event(event: TaskEvent) -> dict[str, Any]:
 
 
 def serialize_approval(approval: ApprovalRecord, task: TaskRecord | None = None) -> dict[str, Any]:
+    decision = approval.decision_json or {}
     return {
         "id": approval.id,
         "task_id": approval.task_id,
@@ -67,9 +69,15 @@ def serialize_approval(approval: ApprovalRecord, task: TaskRecord | None = None)
         "requested_by": approval.requested_by,
         "reviewed_by": approval.reviewed_by,
         "comment": approval.decision_comment,
-        "draft": approval.decision_json.get("draft"),
-        "source": approval.decision_json.get("source"),
-        "issue_key": approval.decision_json.get("issue_key"),
+        "draft": decision.get("draft"),
+        "source": decision.get("source"),
+        "issue_key": decision.get("issue_key"),
+        "owner": decision.get("owner"),
+        "repository": decision.get("repository"),
+        "issue_number": decision.get("issue_number"),
+        "to": decision.get("to", []),
+        "subject": decision.get("subject"),
+        "integration_scope": decision.get("integration_scope"),
         "created_at": approval.created_at.isoformat(),
         "decided_at": approval.decided_at.isoformat() if approval.decided_at else None,
     }
@@ -109,11 +117,39 @@ def create_task(
         status="running",
         actor=principal.subject,
         context_id=request.context_id,
-        payload_json=request.model_dump(),
+        payload_json={
+            **request.model_dump(),
+            "actor_roles": sorted(principal.roles),
+            "actor_scopes": sorted(principal.scopes),
+            "conversation_history": read_conversation_context(
+                session, config, principal, request.context_id
+            ),
+        },
     )
     session.add(task)
     session.flush()
-    return run_workflow(session, config, task, principal)
+    if config.task_execution_mode == "queue":
+        task.status = "queued"
+        publish_event(
+            session,
+            config,
+            task.id,
+            "task.queued",
+            f"{task.title} queued.",
+            {
+                "scenario": task.scenario,
+                "actor": principal.subject,
+                "roles": sorted(principal.roles),
+                "scopes": sorted(principal.scopes),
+            },
+        )
+        session.commit()
+        return task
+    result = run_workflow(session, config, task, principal)
+    if result.status not in {"failed", "rejected", "cancelled"}:
+        save_conversation_exchange(session, config, principal, request.context_id, result)
+        session.commit()
+    return result
 
 
 def list_tasks(
@@ -165,14 +201,14 @@ def cancel_task(
     task = session.get(TaskRecord, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
-    if task.status not in {"running", "awaiting_approval"}:
+    if task.status not in {"queued", "running", "awaiting_approval"}:
         raise HTTPException(status_code=409, detail=f"Task is already {task.status}.")
     task.status = "cancelled"
     task.updated_at = datetime.now(UTC)
     for approval in session.scalars(
         select(ApprovalRecord).where(
             ApprovalRecord.task_id == task_id,
-            ApprovalRecord.status == "pending",
+            ApprovalRecord.status.in_(["pending", "approved_queued"]),
         )
     ).all():
         approval.status = "cancelled"
@@ -216,6 +252,152 @@ def decide_approval(
 
     side_effect = "local approval record only"
     if decision.decision == "approve":
+        source = approval.decision_json.get("source")
+        if source in {"github", "gmail"}:
+            approval.reviewed_by = principal.subject
+            approval.decision_comment = decision.comment
+            approval.decided_at = datetime.now(UTC)
+            task.updated_at = datetime.now(UTC)
+            if config.event_worker_enabled or config.task_execution_mode == "queue":
+                approval.status = "approved_queued"
+                task.status = "running"
+                side_effect = "approved and queued for execution"
+                task.result_json = {
+                    **(task.result_json or {}),
+                    "approval": "approved",
+                    "approved_by": principal.subject,
+                    "external_effect": side_effect,
+                }
+                publish_event(
+                    session,
+                    config,
+                    task.id,
+                    "integration.action.approved",
+                    f"Approved {source} action queued for execution.",
+                    {"approval_id": approval.id, "source": source},
+                )
+                write_audit(
+                    session,
+                    principal.subject,
+                    "integration.action.approved_queued",
+                    source,
+                    approval.id,
+                    details={"task_id": task.id},
+                )
+                session.commit()
+                return {
+                    "approval": serialize_approval(approval, task),
+                    "task": serialize_task(task),
+                    "external_effect": side_effect,
+                }
+            try:
+                from app.integrations import execute_approved_integration
+
+                effect = execute_approved_integration(session, config, approval)
+            except HTTPException:
+                session.rollback()
+                raise
+            except Exception as exc:
+                session.rollback()
+                raise HTTPException(
+                    status_code=502, detail="Approved external action could not be completed."
+                ) from exc
+            approval.reviewed_by = principal.subject
+            approval.decision_comment = decision.comment
+            approval.decided_at = datetime.now(UTC)
+            task.updated_at = datetime.now(UTC)
+            task.result_json = {
+                **(task.result_json or {}),
+                "approved_by": principal.subject,
+                "external_effect": effect.get("external_effect"),
+            }
+            side_effect = effect.get("external_effect", "approved integration action completed")
+            write_audit(
+                session,
+                principal.subject,
+                "integration.action.approved",
+                source,
+                approval.id,
+                details={"task_id": task.id},
+            )
+            publish_event(
+                session,
+                config,
+                task.id,
+                "approval.approved",
+                f"Approval approved by {principal.subject}.",
+                {"approval_id": approval.id, "external_effect": side_effect},
+            )
+            session.commit()
+            return {
+                "approval": serialize_approval(approval, task),
+                "task": serialize_task(task),
+                "external_effect": side_effect,
+            }
+        if source == "workflow":
+            approval.reviewed_by = principal.subject
+            approval.decision_comment = decision.comment
+            approval.decided_at = datetime.now(UTC)
+            task.updated_at = datetime.now(UTC)
+            if config.event_worker_enabled or config.task_execution_mode == "queue":
+                approval.status = "approved_queued"
+                task.status = "running"
+                side_effect = "approved; workflow resume queued"
+                publish_event(
+                    session,
+                    config,
+                    task.id,
+                    "workflow.resume.approved",
+                    "Human-approved workflow is queued to resume.",
+                    {"approval_id": approval.id},
+                )
+                write_audit(
+                    session,
+                    principal.subject,
+                    "workflow.approval.queued",
+                    "workflow",
+                    approval.decision_json.get("workflow_id"),
+                    details={"task_id": task.id, "approval_id": approval.id},
+                )
+                task.result_json = {
+                    **(task.result_json or {}),
+                    "approval": "approved",
+                    "approved_by": principal.subject,
+                    "external_effect": side_effect,
+                }
+                session.commit()
+                return {
+                    "approval": serialize_approval(approval, task),
+                    "task": serialize_task(task),
+                    "external_effect": side_effect,
+                }
+            try:
+                from app.custom_workflows import resume_approved_workflow
+
+                approval.status = "approved"
+                result = resume_approved_workflow(session, config, task, approval, principal)
+            except HTTPException:
+                session.rollback()
+                raise
+            approval.reviewed_by = principal.subject
+            approval.decision_comment = decision.comment
+            approval.decided_at = datetime.now(UTC)
+            approval.status = "failed" if result.get("status") == "failed" else "approved"
+            side_effect = "workflow resumed after human approval"
+            write_audit(
+                session,
+                principal.subject,
+                "workflow.approval.resumed",
+                "workflow",
+                approval.decision_json.get("workflow_id"),
+                details={"task_id": task.id, "approval_id": approval.id},
+            )
+            session.commit()
+            return {
+                "approval": serialize_approval(approval, task),
+                "task": result,
+                "external_effect": side_effect,
+            }
         issue_key = approval.decision_json.get("issue_key")
         if issue_key:
             try:
@@ -246,6 +428,13 @@ def decide_approval(
     approval.decision_comment = decision.comment
     approval.decided_at = datetime.now(UTC)
     task.updated_at = datetime.now(UTC)
+    if task.context_id and task.scenario != "integration":
+        memory_owner = Principal(
+            subject=task.actor,
+            roles=frozenset(task.payload_json.get("actor_roles", [])),
+            scopes=frozenset(task.payload_json.get("actor_scopes", [])),
+        )
+        save_conversation_exchange(session, config, memory_owner, task.context_id, task)
     publish_event(
         session,
         config,
@@ -440,6 +629,9 @@ def list_activities(session: Session, limit: int = 100) -> list[dict[str, Any]]:
             "resource_id": item.resource_id,
             "decision": item.decision,
             "details": item.details_json,
+            "sequence": item.sequence,
+            "previous_hash": item.previous_hash,
+            "entry_hash": item.entry_hash,
             "created_at": item.created_at.isoformat(),
         }
         for item in session.scalars(

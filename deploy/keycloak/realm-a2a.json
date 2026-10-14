@@ -1,0 +1,82 @@
+{
+  "realm": "a2a",
+  "enabled": true,
+  "displayName": "A2A Agent Platform",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "roles": {
+    "realm": [
+      { "name": "employee", "description": "Read approved knowledge and create tasks" },
+      { "name": "operator", "description": "Operate workflows, sources and audit" },
+      { "name": "approver", "description": "Review gated external actions" },
+      { "name": "admin", "description": "Manage platform and agent identities" },
+      { "name": "agent", "description": "Marks a service-account token for registry validation" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "a2a-api",
+      "name": "A2A API resource audience",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": []
+    },
+    {
+      "clientId": "a2a-console",
+      "name": "A2A Web Console",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:8000/*", "https://localhost:8000/*"],
+      "webOrigins": ["http://localhost:8000", "https://localhost:8000"],
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "protocolMappers": [
+        {
+          "name": "a2a-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "a2a-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "a2a-agent-template",
+      "name": "Clone per machine agent; use client credentials",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "a2a-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "a2a-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "defaultDefaultClientScopes": ["acr", "roles", "web-origins", "profile", "email"],
+  "defaultOptionalClientScopes": ["address", "phone", "offline_access", "microprofile-jwt"]
+}

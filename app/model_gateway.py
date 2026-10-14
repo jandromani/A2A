@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
+from app.secrets import resolve_secret
 
 _PROVIDER_URLS = {
     "openai": "https://api.openai.com/v1",
@@ -56,10 +57,10 @@ class ModelGateway:
             "anthropic": self.config.anthropic_api_key,
             "groq": self.config.groq_api_key,
         }.get(self.provider)
-        if key_setting and key_setting.get_secret_value():
-            return key_setting.get_secret_value()
+        if key_setting:
+            return resolve_secret(self.config, key_setting)
         secret = self.config.model_api_key
-        return secret.get_secret_value() if secret else None
+        return resolve_secret(self.config, secret)
 
     @property
     def configured(self) -> bool:
@@ -180,8 +181,17 @@ class ModelGateway:
                 )
             except ImportError:
                 span_context = nullcontext()
-            with span_context:
+            with span_context as span:
                 text, input_tokens, output_tokens = self._request(system_prompt, user_prompt)
+                if span is not None:
+                    span.set_attribute("gen_ai.response.model", self.config.model_name or "")
+                    if input_tokens is not None:
+                        span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+                    if output_tokens is not None:
+                        span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
+                    estimated_cost = self._cost(input_tokens, output_tokens)
+                    if estimated_cost is not None:
+                        span.set_attribute("gen_ai.usage.cost_usd", estimated_cost)
             if text:
                 return ModelResult(
                     text=text,

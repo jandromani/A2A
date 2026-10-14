@@ -10,7 +10,15 @@ COPY app ./app
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-RUN pip install --upgrade pip && pip install .
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && curl --fail --show-error --location --retry 3 \
+    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+    -o /etc/ssl/certs/rds-global-bundle.pem \
+  && apt-get purge -y --auto-remove curl \
+  && rm -rf /var/lib/apt/lists/* \
+  && pip install --upgrade pip \
+  && pip install .
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

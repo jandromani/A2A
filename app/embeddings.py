@@ -6,16 +6,16 @@ from typing import Any
 import httpx
 
 from app.config import Settings
+from app.secrets import resolve_secret
 
 DIMENSIONS = 384
 
 
-def _first_secret(*values: Any) -> str | None:
+def _first_secret(config: Settings, *values: Any) -> str | None:
     for value in values:
-        if value is not None:
-            secret = value.get_secret_value()
-            if secret:
-                return secret
+        secret = resolve_secret(config, value)
+        if secret:
+            return secret
     return None
 
 
@@ -41,14 +41,14 @@ def embedding_for(text: str, config: Settings) -> list[float]:
     if config.embedding_provider == "openai":
         base_url = config.embedding_base_url or config.model_base_url or "https://api.openai.com/v1"
         api_key = _first_secret(
-            config.embedding_api_key, config.openai_api_key, config.model_api_key
+            config, config.embedding_api_key, config.openai_api_key, config.model_api_key
         )
     elif config.embedding_provider == "ollama":
         base_url = config.embedding_base_url or config.ollama_base_url
-        api_key = _first_secret(config.embedding_api_key)
+        api_key = _first_secret(config, config.embedding_api_key)
     else:
         base_url = config.embedding_base_url or config.model_base_url
-        api_key = _first_secret(config.embedding_api_key, config.model_api_key)
+        api_key = _first_secret(config, config.embedding_api_key, config.model_api_key)
     if not base_url:
         return local_embedding(text)
     headers = {"Content-Type": "application/json"}

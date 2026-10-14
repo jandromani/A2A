@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -75,7 +75,9 @@ class TaskEvent(Base):
     __tablename__ = "task_events"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), index=True, nullable=True
+    )
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     message: Mapped[str] = mapped_column(String(500))
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -120,6 +122,55 @@ class AuditRecord(Base):
     resource_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     decision: Mapped[str] = mapped_column(String(40), default="allowed")
     details_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, unique=True)
+    previous_hash: Mapped[str] = mapped_column(String(64), default="")
+    entry_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class AuditChainState(Base):
+    __tablename__ = "audit_chain_state"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="global")
+    last_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    head_hash: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AgentIdentity(Base):
+    __tablename__ = "agent_identities"
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(180))
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    roles_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_by: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ModelUsageLedger(Base):
+    __tablename__ = "model_usage_ledger"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    call_key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    actor: Mapped[str] = mapped_column(String(200), index=True)
+    provider: Mapped[str] = mapped_column(String(80), index=True)
+    model: Mapped[str] = mapped_column(String(180), index=True)
+    attempted: Mapped[bool] = mapped_column(Boolean, default=True)
+    succeeded: Mapped[bool] = mapped_column(Boolean, default=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_rate_per_million: Mapped[float | None] = mapped_column(Float, nullable=True)
+    output_rate_per_million: Mapped[float | None] = mapped_column(Float, nullable=True)
+    estimated_cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )
@@ -138,3 +189,96 @@ class ConnectorRecord(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_invoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DataSourceRecord(Base):
+    __tablename__ = "data_sources"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(180))
+    endpoint: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    auth_env: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    scope: Mapped[str] = mapped_column(String(80), index=True)
+    format: Mapped[str] = mapped_column(String(24), default="json")
+    source_options: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_status: Mapped[str] = mapped_column(String(32), default="never")
+    last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ConversationMemory(Base):
+    __tablename__ = "conversation_memory"
+
+    thread_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    context_id: Mapped[str] = mapped_column(String(120), index=True)
+    actor: Mapped[str] = mapped_column(String(200), index=True)
+    scope_snapshot: Mapped[list[str]] = mapped_column(JSON, default=list)
+    messages_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    checkpoint_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class WorkflowDefinition(Base):
+    __tablename__ = "workflow_definitions"
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    name: Mapped[str] = mapped_column(String(180))
+    description: Mapped[str] = mapped_column(Text)
+    version: Mapped[str] = mapped_column(String(40), default="1.0.0")
+    definition_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WorkflowCheckpoint(Base):
+    __tablename__ = "workflow_checkpoints"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    step: Mapped[str] = mapped_column(String(120))
+    state_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class OutboxEvent(Base):
+    __tablename__ = "event_outbox"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    task_event_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    external_id: Mapped[str | None] = mapped_column(String(300), nullable=True, unique=True)
+    topic: Mapped[str] = mapped_column(String(100), index=True)
+    aggregate_id: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EventReceipt(Base):
+    __tablename__ = "event_receipts"
+
+    event_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    consumer: Mapped[str] = mapped_column(String(120), index=True)
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )

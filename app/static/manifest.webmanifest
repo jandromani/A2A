@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Agentic Platform",
+  "short_name": "A2A Platform",
+  "description": "Consola para tareas, agentes, aprobaciones y auditoría.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#f5f6f8",
+  "theme_color": "#101828",
+  "icons": [
+    {
+      "src": "/static/mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# Mount the referenced files as read-only secrets and use port 8883 only.
+per_listener_settings true
+listener 8883 0.0.0.0
+allow_anonymous false
+password_file /run/secrets/mosquitto/passwords
+acl_file /run/secrets/mosquitto/acl
+cafile /run/secrets/mosquitto/ca.crt
+certfile /run/secrets/mosquitto/tls.crt
+keyfile /run/secrets/mosquitto/tls.key
+tls_version tlsv1.2
+persistence true
+persistence_location /mosquitto/data/
+log_dest stdout

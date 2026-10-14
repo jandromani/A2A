@@ -7,12 +7,15 @@ from sqlalchemy import engine_from_config, pool, text
 from app import models  # noqa: F401
 from app.config import settings
 from app.database import Base
+from app.secrets import resolve_secret
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-url = os.getenv("DATABASE_URL", settings.database_url)
+url = resolve_secret(settings, os.getenv("DATABASE_URL", settings.database_url))
+if not url:
+    raise RuntimeError("DATABASE_URL is not configured for Alembic.")
 config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
 target_metadata = Base.metadata
 

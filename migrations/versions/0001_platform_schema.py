@@ -5,6 +5,7 @@ Revises:
 """
 
 from alembic import op
+from sqlalchemy import text
 
 from app import models  # noqa: F401
 from app.database import Base
@@ -16,7 +17,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    Base.metadata.create_all(bind=op.get_bind())
+    connection = op.get_bind()
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    Base.metadata.create_all(bind=connection)
 
 
 def downgrade() -> None:

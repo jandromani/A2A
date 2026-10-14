@@ -1,0 +1,292 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: a2a-migrate
+  namespace: a2a
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: a2a-migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: a2a-db-migrator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: "@@A2A_IMAGE@@"
+          imagePullPolicy: IfNotPresent
+          command: [alembic, upgrade, head]
+          envFrom:
+            - configMapRef:
+                name: a2a-platform
+          env:
+            - name: VAULT_KUBERNETES_ROLE
+              value: a2a-db-migrator
+            - name: DATABASE_URL
+              value: vault://a2a/production/database-admin#url
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: a2a-backup-config
+  namespace: a2a
+data:
+  BACKUP_BUCKET: "@@BACKUP_BUCKET@@"
+  BACKUP_PREFIX: a2a/production
+  AWS_REGION: "@@AWS_REGION@@"
+  AUDIT_ARCHIVE_BUCKET: "@@AUDIT_BUCKET@@"
+  AUDIT_ARCHIVE_REGION: "@@AWS_REGION@@"
+  AUDIT_ARCHIVE_PREFIX: a2a/production/audit
+  AUDIT_ARCHIVE_RETENTION_DAYS: "@@AUDIT_RETENTION_DAYS@@"
+  AUDIT_ARCHIVE_KMS_KEY_ID: "@@AUDIT_KMS_KEY_ARN@@"
+  S3_KMS_KEY_ID: "@@BACKUP_KMS_KEY_ARN@@"
+  S3_ENDPOINT_URL: ""
+  BACKUP_TIMEOUT_SECONDS: "3600"
+  DATA_LAKE_PATH: /data/lake
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: a2a-db-migrator
+  namespace: a2a
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: a2a-postgres-backup
+  namespace: a2a
+  annotations:
+    eks.amazonaws.com/role-arn: "@@BACKUP_WRITER_ROLE_ARN@@"
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: a2a-audit-archiver
+  namespace: a2a
+  annotations:
+    eks.amazonaws.com/role-arn: "@@AUDIT_ARCHIVER_ROLE_ARN@@"
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: a2a-production-preflight
+  namespace: a2a
+  annotations:
+    eks.amazonaws.com/role-arn: "@@AUDIT_ARCHIVER_ROLE_ARN@@"
+automountServiceAccountToken: true
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: a2a-postgres-backup
+  namespace: a2a
+spec:
+  schedule: "20 2 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app: a2a-postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: a2a-postgres-backup
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: "@@BACKUP_IMAGE@@"
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - configMapRef:
+                    name: a2a-backup-config
+                - configMapRef:
+                    name: a2a-platform
+              env:
+                - name: VAULT_KUBERNETES_ROLE
+                  value: a2a-postgres-backup
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "2"
+                  memory: 4Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: data-lake
+                  mountPath: /data/lake
+                  readOnly: true
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: data-lake
+              persistentVolumeClaim:
+                claimName: a2a-data-lake
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: a2a-audit-archive
+  namespace: a2a
+spec:
+  schedule: "*/5 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: a2a-audit-archive
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: a2a-audit-archiver
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: archive
+              image: "@@BACKUP_IMAGE@@"
+              imagePullPolicy: IfNotPresent
+              command: [python, -m, app.audit_archive_worker]
+              envFrom:
+                - configMapRef:
+                    name: a2a-platform
+                - configMapRef:
+                    name: a2a-backup-config
+              env:
+                - name: VAULT_KUBERNETES_ROLE
+                  value: a2a-audit-archiver
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: a2a-production-preflight
+  namespace: a2a
+spec:
+  schedule: "0 4 1 1 *"
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: a2a-production-preflight
+        spec:
+          restartPolicy: Never
+          serviceAccountName: a2a-production-preflight
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: preflight
+              image: "@@BACKUP_IMAGE@@"
+              imagePullPolicy: IfNotPresent
+              command: [python, -m, app.production_preflight]
+              envFrom:
+                - configMapRef:
+                    name: a2a-platform
+                - configMapRef:
+                    name: a2a-backup-config
+              env:
+                - name: VAULT_KUBERNETES_ROLE
+                  value: a2a-runtime
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}

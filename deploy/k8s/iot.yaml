@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-mqtt-ingress
+  namespace: a2a
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: a2a-mqtt-ingress
+  template:
+    metadata:
+      labels:
+        app: a2a-mqtt-ingress
+    spec:
+      serviceAccountName: a2a-runtime
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mqtt
+          image: "@@A2A_IMAGE@@"
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, app.mqtt_worker]
+          envFrom:
+            - configMapRef:
+                name: a2a-platform
+          env:
+            - name: MQTT_BROKER_URL
+              value: vault://a2a/production/integrations/mqtt#broker_url
+            - name: MQTT_USERNAME
+              value: vault://a2a/production/integrations/mqtt#username
+            - name: MQTT_PASSWORD
+              value: vault://a2a/production/integrations/mqtt#password
+            - name: MQTT_CLIENT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: MQTT_CA_FILE
+              value: /var/run/mqtt/ca.crt
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: mqtt-ca
+              mountPath: /var/run/mqtt
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: mqtt-ca
+          secret:
+            secretName: a2a-mqtt-tls
+            optional: true
+            items:
+              - key: ca.crt
+                path: ca.crt

@@ -1,0 +1,11 @@
+region              = "us-east-1"
+public_domain       = "a2a.example.org"
+route53_zone_id     = "Z1234567890123"
+cluster_admin_cidrs = ["198.51.100.10/32"]
+audit_bucket_name   = "replace-with-globally-unique-a2a-audit-bucket"
+backup_bucket_name  = "replace-with-globally-unique-a2a-backup-bucket"
+
+# Supply the following through protected TF_VAR_* secrets at apply time.
+# Never commit a populated .tfvars file or Terraform state.
+# database_admin_password = ""
+# valkey_auth_token = ""

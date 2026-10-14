@@ -12,6 +12,8 @@ from app.config import Settings
 from app.embeddings import embedding_for, lexical_score
 from app.event_bus import publish_event, write_audit
 from app.jira import JiraConnector, JiraConnectorError
+from app.ledger import record_model_usage
+from app.memory import save_workflow_checkpoint
 from app.model_gateway import ModelGateway, ModelResult
 from app.models import (
     ApprovalRecord,
@@ -83,6 +85,9 @@ def _authorize(state: WorkflowState) -> dict[str, Any]:
         "The request was authorized." if allowed else "The request was denied.",
         {"allowed": allowed, "reason": reason},
     )
+    save_workflow_checkpoint(
+        state["session"], task.id, "authorize", {"authorized": allowed, "denial": reason}
+    )
     return {"authorized": allowed, "denial": reason}
 
 
@@ -126,10 +131,17 @@ def _search_documents(
 
 def _knowledge_result(state: WorkflowState) -> dict[str, Any]:
     query = state["payload"]["message"]
+    history = state["payload"].get("conversation_history", [])
+    prior_user_context = [
+        str(item.get("content", ""))[:1_000]
+        for item in history[-8:]
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    retrieval_query = " ".join([*prior_user_context[-2:], query]).strip()
     allowed, reason = authorize(state["principal"], "knowledge.read", {}, state["config"])
     docs = (
         _search_documents(
-            state["session"], query, state["principal"].scopes, state["config"], limit=5
+            state["session"], retrieval_query, state["principal"].scopes, state["config"], limit=5
         )
         if allowed
         else []
@@ -175,7 +187,8 @@ def _knowledge_result(state: WorkflowState) -> dict[str, Any]:
         model_result = model_gateway.generate(
             "Responde en español usando únicamente los fragmentos proporcionados. "
             "No inventes datos, plazos ni aprobadores. Si falta evidencia, dilo.",
-            f"Pregunta:\n{query}\n\nFragmentos autorizados:\n{evidence}",
+            f"Contexto previo (solo para resolver referencias):\n{prior_user_context[-4:]}\n\n"
+            f"Pregunta actual:\n{query}\n\nFragmentos autorizados:\n{evidence}",
         )
         if model_result.text:
             answer = model_result.text
@@ -392,6 +405,7 @@ def _execute(state: WorkflowState) -> dict[str, Any]:
         result = _incident_result(state)
         message = "Incident context was collected and a draft was prepared."
     _event(state, "workflow.step.completed", message, {"scenario": scenario})
+    save_workflow_checkpoint(state["session"], state["task"].id, "execute", {"result": result})
     return {"result": result}
 
 
@@ -458,6 +472,12 @@ def _evaluate(state: WorkflowState) -> dict[str, Any]:
         {"passed": passed, "score": score, "checks": checks},
     )
     result["evaluation"] = {"passed": passed, "score": score, "checks": checks}
+    save_workflow_checkpoint(
+        state["session"],
+        state["task"].id,
+        "evaluate",
+        {"checks": checks, "result": result},
+    )
     return {"checks": checks, "result": result}
 
 
@@ -487,6 +507,9 @@ def _create_approval(state: WorkflowState) -> dict[str, Any]:
     )
     state["session"].add(approval)
     state["session"].flush()
+    save_workflow_checkpoint(
+        state["session"], state["task"].id, "approval", {"approval_id": approval.id}
+    )
     _event(
         state,
         "approval.requested",
@@ -514,6 +537,13 @@ def _finish(state: WorkflowState) -> dict[str, Any]:
             status = "completed"
     task.status = status
     task.result_json = result
+    record_model_usage(
+        state["session"],
+        state["config"],
+        task,
+        f"{task.id}:primary",
+        result.get("model_usage") if isinstance(result, dict) else None,
+    )
     task.updated_at = datetime.now(UTC)
     _event(state, f"task.{status}", f"Task finished with status {status}.", {})
     write_audit(
@@ -524,6 +554,12 @@ def _finish(state: WorkflowState) -> dict[str, Any]:
         task.id,
         decision=status,
         details={"scenario": task.scenario},
+    )
+    save_workflow_checkpoint(
+        state["session"],
+        task.id,
+        "finish",
+        {"final_status": status, "result": result},
     )
     return {"final_status": status, "result": result}
 

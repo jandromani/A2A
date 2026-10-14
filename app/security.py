@@ -1,13 +1,17 @@
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 from functools import lru_cache
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
+from sqlalchemy import select
 
+from app.models import AgentIdentity
 from app.schemas import Principal
+from app.secrets import resolve_secret
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -19,6 +23,10 @@ def _jwks_client(issuer: str) -> PyJWKClient:
 
 def _normalize_role(value: object) -> str:
     return re.sub(r"[^a-z0-9_-]", "", str(value).lower())
+
+
+def _items(value: str) -> frozenset[str]:
+    return frozenset(item.strip() for item in re.split(r"[\s,]+", value) if item.strip())
 
 
 def get_principal(
@@ -41,13 +49,25 @@ def get_principal(
     if mode == "api_key":
         import hmac
 
-        configured = request.app.state.settings.api_bearer_token or ""
+        try:
+            configured = (
+                resolve_secret(
+                    request.app.state.settings, request.app.state.settings.api_bearer_token
+                )
+                or ""
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail="The authentication secret is unavailable."
+            ) from exc
         if not hmac.compare_digest(token, configured):
             raise HTTPException(status_code=401, detail="Invalid bearer token.")
         return Principal(
-            subject="api-key",
-            roles=frozenset({"admin"}),
-            scopes=frozenset({"*"}),
+            subject=request.app.state.settings.api_key_subject,
+            roles=frozenset(
+                _normalize_role(role) for role in _items(request.app.state.settings.api_key_roles)
+            ),
+            scopes=_items(request.app.state.settings.api_key_scopes),
         )
 
     config = request.app.state.settings
@@ -71,13 +91,39 @@ def get_principal(
 
     realm_access = claims.get("realm_access") or {}
     raw_roles = list(realm_access.get("roles", [])) + list(claims.get("roles", []))
+    roles = frozenset(_normalize_role(role) for role in raw_roles)
     scope_claim = claims.get("agentic_scopes", [])
     if isinstance(scope_claim, str):
         scope_claim = scope_claim.split()
+    agent_id = claims.get(config.agent_identity_claim)
+    if not agent_id and "agent" in roles:
+        agent_id = claims.get("azp") or claims.get("client_id")
+    if agent_id:
+        factory = request.app.state.session_factory
+        with factory() as session:
+            identity = session.scalar(
+                select(AgentIdentity).where(AgentIdentity.id == str(agent_id))
+            )
+            expires_at = identity.expires_at if identity else None
+            if expires_at and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if (
+                not identity
+                or identity.status != "active"
+                or identity.revoked_at is not None
+                or (expires_at is not None and expires_at <= datetime.now(UTC))
+            ):
+                raise HTTPException(status_code=401, detail="Agent identity is not active.")
+            return Principal(
+                subject=f"agent:{identity.id}",
+                email=claims.get("email"),
+                roles=frozenset(identity.roles_json or []),
+                scopes=frozenset(identity.scopes_json or []),
+            )
     return Principal(
         subject=str(claims["sub"]),
         email=claims.get("email"),
-        roles=frozenset(_normalize_role(role) for role in raw_roles),
+        roles=roles,
         scopes=frozenset(str(scope) for scope in scope_claim),
     )
 

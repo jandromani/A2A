@@ -3,6 +3,7 @@ from typing import Any
 import httpx
 
 from app.config import Settings
+from app.secrets import resolve_secret
 
 
 class JiraConnectorError(RuntimeError):
@@ -16,7 +17,9 @@ class JiraConnector:
     @property
     def configured(self) -> bool:
         return bool(
-            self.config.jira_base_url and self.config.jira_email and self.config.jira_api_token
+            self.config.jira_base_url
+            and self.config.jira_email
+            and resolve_secret(self.config, self.config.jira_api_token)
         )
 
     def _client(self) -> httpx.Client:
@@ -24,7 +27,7 @@ class JiraConnector:
             raise JiraConnectorError("Jira is not configured.")
         return httpx.Client(
             base_url=self.config.jira_base_url.rstrip("/"),
-            auth=(self.config.jira_email, self.config.jira_api_token),
+            auth=(self.config.jira_email, resolve_secret(self.config, self.config.jira_api_token)),
             headers={"Accept": "application/json"},
             timeout=10.0,
         )

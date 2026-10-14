@@ -13,10 +13,12 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.event_bus import write_audit
-from app.mcp_transport import CURRENT_PROTOCOL_VERSION, encode_header_value
+from app.mcp_transport import CURRENT_PROTOCOL_VERSION
 from app.models import ConnectorRecord
 from app.policy import authorize
 from app.schemas import ConnectorCreate, ConnectorInvoke, Principal
+from app.sdk_clients import call_a2a_sdk, call_mcp_sdk
+from app.secrets import resolve_named_secret
 
 MCP_ACCEPT = "application/json, text/event-stream"
 
@@ -153,10 +155,10 @@ def _connector(session: Session, connector_id: str) -> ConnectorRecord:
     return item
 
 
-def _headers(connector: ConnectorRecord, accept: str) -> dict[str, str]:
+def _headers(connector: ConnectorRecord, config: Settings, accept: str) -> dict[str, str]:
     result = {"Accept": accept, "Content-Type": "application/json"}
     if connector.auth_env:
-        token = os.getenv(connector.auth_env)
+        token = resolve_named_secret(config, connector.auth_env)
         if not token:
             raise HTTPException(
                 status_code=424,
@@ -176,7 +178,7 @@ def _post(
     try:
         return httpx.post(
             connector.endpoint,
-            headers=headers or _headers(connector, MCP_ACCEPT),
+            headers=headers or _headers(connector, config, MCP_ACCEPT),
             json=payload,
             timeout=15.0,
         )
@@ -211,51 +213,13 @@ def _mcp_exchange(
 ) -> dict[str, Any]:
     params = params or {}
     if connector.protocol_version == CURRENT_PROTOCOL_VERSION:
-        modern_params = {
-            **params,
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": CURRENT_PROTOCOL_VERSION,
-                "io.modelcontextprotocol/clientInfo": {
-                    "name": "agentic-atlas-platform",
-                    "version": "0.1.0",
-                },
-                "io.modelcontextprotocol/clientCapabilities": {},
-            },
-        }
-        headers = _headers(connector, MCP_ACCEPT)
-        headers["MCP-Protocol-Version"] = CURRENT_PROTOCOL_VERSION
-        headers["Mcp-Method"] = method
-        header_name = (
-            params.get("name")
-            if method in {"tools/call", "prompts/get"}
-            else params.get("uri")
-            if method == "resources/read"
-            else None
+        validate_outbound_endpoint(connector.endpoint, config)
+        return call_mcp_sdk(
+            connector.endpoint,
+            _headers(connector, config, MCP_ACCEPT),
+            method,
+            params,
         )
-        if header_name is not None:
-            headers["Mcp-Name"] = encode_header_value(str(header_name))
-        response = _post(
-            connector,
-            config,
-            {
-                "jsonrpc": "2.0",
-                "id": uuid4().hex,
-                "method": method,
-                "params": modern_params,
-            },
-            headers,
-        )
-        modern_body = _rpc_response(response)
-        modern_error = (modern_body or {}).get("error") or {}
-        if response.is_success and modern_body is not None and not modern_error:
-            return modern_body.get("result", {})
-        if modern_error.get("code") in {-32020, -32022}:
-            raise HTTPException(
-                status_code=502,
-                detail="Remote MCP rejected protocol metadata; version fallback was blocked.",
-            )
-        if response.status_code not in {400, 404, 405} and modern_error.get("code") != -32601:
-            raise HTTPException(status_code=502, detail="Remote MCP operation failed.")
 
     return _mcp_exchange_legacy(connector, config, method, params)
 
@@ -299,7 +263,7 @@ def _mcp_exchange_legacy(
     if not init or not negotiated:
         raise HTTPException(status_code=502, detail="Remote MCP initialization failed.")
 
-    headers = _headers(connector, MCP_ACCEPT)
+    headers = _headers(connector, config, MCP_ACCEPT)
     headers["MCP-Protocol-Version"] = negotiated
     session_id = init.headers.get("Mcp-Session-Id")
     if session_id:
@@ -372,37 +336,10 @@ def invoke_connector(
             raise HTTPException(status_code=422, detail="An A2A message is required.")
         metadata = dict(body.metadata)
         metadata["scenario"] = body.scenario
-        headers = _headers(record, "application/json")
-        headers["A2A-Version"] = "1.0"
-        result = _post(
-            record,
-            config,
-            {
-                "jsonrpc": "2.0",
-                "id": uuid4().hex,
-                "method": "SendMessage",
-                "params": {
-                    "message": {
-                        "role": "ROLE_USER",
-                        "parts": [{"text": body.message}],
-                        "messageId": uuid4().hex,
-                    },
-                    "metadata": metadata,
-                },
-            },
-            headers,
-        )
-        if not result.is_success:
-            raise HTTPException(status_code=502, detail="Remote A2A request failed.")
-        try:
-            response = result.json()
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=502, detail="Remote A2A returned invalid JSON."
-            ) from exc
-        if "error" in response:
-            raise HTTPException(status_code=502, detail="Remote A2A rejected the task.")
-        output: dict[str, Any] = {"protocol": "a2a", "response": response.get("result")}
+        headers = _headers(record, config, "application/json")
+        validate_outbound_endpoint(record.endpoint, config)
+        response = call_a2a_sdk(record.endpoint, headers, body.message, metadata)
+        output: dict[str, Any] = {"protocol": "a2a", "response": response}
         operation = "connector.a2a.message_send"
     else:
         if not body.tool_name:

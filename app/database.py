@@ -40,12 +40,44 @@ def initialize_database(
     from app import models  # noqa: F401
     from app.seed import seed_database
 
-    if engine.dialect.name == "postgresql":
+    production = bool(config and config.environment == "production")
+    if engine.dialect.name == "postgresql" and not production:
         with engine.begin() as connection:
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    Base.metadata.create_all(bind=engine)
-    with factory() as session:
-        seed_database(session, config)
+    if not production:
+        Base.metadata.create_all(bind=engine)
+        if engine.dialect.name == "sqlite":
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "CREATE TRIGGER IF NOT EXISTS audit_events_no_update "
+                        "BEFORE UPDATE ON audit_events BEGIN "
+                        "SELECT RAISE(ABORT, 'audit_events is append-only'); END"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "CREATE TRIGGER IF NOT EXISTS audit_events_no_delete "
+                        "BEFORE DELETE ON audit_events BEGIN "
+                        "SELECT RAISE(ABORT, 'audit_events is append-only'); END"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "CREATE TRIGGER IF NOT EXISTS model_usage_no_update "
+                        "BEFORE UPDATE ON model_usage_ledger BEGIN "
+                        "SELECT RAISE(ABORT, 'model_usage_ledger is append-only'); END"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "CREATE TRIGGER IF NOT EXISTS model_usage_no_delete "
+                        "BEFORE DELETE ON model_usage_ledger BEGIN "
+                        "SELECT RAISE(ABORT, 'model_usage_ledger is append-only'); END"
+                    )
+                )
+        with factory() as session:
+            seed_database(session, config)
 
 
 def get_db(request: Request) -> Generator[Session, None, None]:

@@ -1,0 +1,6 @@
+bucket       = "replace-with-state-bucket-output"
+key          = "a2a/production/terraform.tfstate"
+region       = "replace-with-aws-region"
+encrypt      = true
+kms_key_id   = "replace-with-state-kms-key-output"
+use_lockfile = true

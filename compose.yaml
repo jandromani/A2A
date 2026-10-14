@@ -10,10 +10,31 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8000}
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql+psycopg://agentic:agentic-local-only@postgres:5432/agentic}
       REDIS_URL: redis://valkey:6379/0
+      EVENT_WORKER_ENABLED: ${EVENT_WORKER_ENABLED:-true}
+      EVENT_CONSUMER_GROUP: ${EVENT_CONSUMER_GROUP:-agentic-workers}
+      EVENT_CONSUMER_NAME: ${EVENT_CONSUMER_NAME:-agentic-worker-1}
+      TASK_EXECUTION_MODE: ${TASK_EXECUTION_MODE:-queue}
+      EVENT_POLL_INTERVAL_SECONDS: ${EVENT_POLL_INTERVAL_SECONDS:-1}
+      DATA_LAKE_ROOT: /app/data/lake
+      DATA_SOURCE_SYNC_INTERVAL_SECONDS: ${DATA_SOURCE_SYNC_INTERVAL_SECONDS:-}
       AUTH_MODE: ${AUTH_MODE:-dev}
       API_BEARER_TOKEN: ${API_BEARER_TOKEN:-}
+      API_KEY_SUBJECT: ${API_KEY_SUBJECT:-configured-api-key}
+      API_KEY_ROLES: ${API_KEY_ROLES:-employee}
+      API_KEY_SCOPES: ${API_KEY_SCOPES:-knowledge:read tasks:read tasks:write}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      AGENT_IDENTITY_CLAIM: ${AGENT_IDENTITY_CLAIM:-agentic_agent_id}
+      SECRET_PROVIDER: ${SECRET_PROVIDER:-env}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      VAULT_KUBERNETES_ROLE: ${VAULT_KUBERNETES_ROLE:-}
+      VAULT_KUBERNETES_MOUNT: ${VAULT_KUBERNETES_MOUNT:-kubernetes}
+      VAULT_NAMESPACE: ${VAULT_NAMESPACE:-}
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
+      VAULT_CACHE_TTL_SECONDS: ${VAULT_CACHE_TTL_SECONDS:-60}
       OPA_URL: ${OPA_URL:-}
       CONNECTOR_ALLOWED_HOSTS: ${CONNECTOR_ALLOWED_HOSTS:-}
       MODEL_PROVIDER: ${MODEL_PROVIDER:-openai-compatible}
@@ -26,6 +47,9 @@ services:
       MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-1200}
       MODEL_INPUT_COST_PER_MILLION: ${MODEL_INPUT_COST_PER_MILLION:-}
       MODEL_OUTPUT_COST_PER_MILLION: ${MODEL_OUTPUT_COST_PER_MILLION:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai-compatible}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
@@ -34,13 +58,26 @@ services:
       JIRA_BASE_URL: ${JIRA_BASE_URL:-}
       JIRA_EMAIL: ${JIRA_EMAIL:-}
       JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REFRESH_TOKEN: ${GOOGLE_REFRESH_TOKEN:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      MQTT_BROKER_URL: ${MQTT_BROKER_URL:-}
+      MQTT_TOPIC_FILTER: ${MQTT_TOPIC_FILTER:-a2a/telemetry/+/events}
+      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID:-a2a-platform-ingress}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      MQTT_CA_FILE: ${MQTT_CA_FILE:-}
+      MQTT_MAX_MESSAGE_BYTES: ${MQTT_MAX_MESSAGE_BYTES:-256000}
     command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
         condition: service_healthy
+    volumes:
+      - ./data/lake:/app/data/lake:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
       interval: 15s
@@ -85,12 +122,33 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.2
     profiles: ["identity"]
-    command: ["start-dev", "--http-port=8080"]
+    command: ["start-dev", "--http-port=8080", "--import-realm"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-local-only-change-me}
     ports:
       - "127.0.0.1:8081:8080"
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import:ro
+
+  vault:
+    image: hashicorp/vault:1.20.4
+    profiles: ["secrets"]
+    command: ["server", "-dev", "-dev-root-token-id=local-dev-token"]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: local-dev-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "127.0.0.1:8200:8200"
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22
+    profiles: ["iot"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1883:1883"
+    volumes:
+      - ./deploy/mosquitto/mosquitto-dev.conf:/mosquitto/config/mosquitto.conf:ro
 
   ollama:
     image: ollama/ollama:latest
@@ -98,6 +156,18 @@ services:
     restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
+
+  agentgateway:
+    image: cr.agentgateway.dev/agentgateway:v1.6.0
+    profiles: ["agentgateway"]
+    restart: unless-stopped
+    command: ["-f", "/config.yaml"]
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./deploy/agentgateway.yaml:/config.yaml:ro
+    expose:
+      - "4000"
 
 volumes:
   postgres_data:

@@ -2,6 +2,8 @@
 
 const state = {
   view: "overview", catalogKind: "all", token: "", system: null,
+  contextId: localStorage.getItem("agentic-context-id") ||
+    (window.crypto && crypto.randomUUID ? crypto.randomUUID() : "ctx-" + Date.now().toString(36) + Math.random().toString(36).slice(2)),
   architecture: null, architectureCategory: "all", architectureQuery: "",
   architectureSelected: "", architectureZoom: 1, architectureLinks: true,
   architectureScenario: 0, architectureScenarioStep: 0, architectureActiveNodes: []
@@ -85,7 +87,7 @@ function setView(name) {
   document.getElementById("sidebar").classList.remove("open");
   const loaders = {
     overview: loadOverview,
-    workflows: updateScenarioForm,
+    workflows: loadWorkflowView,
     tasks: loadTasks,
     approvals: loadApprovals,
     catalog: loadCatalog,
@@ -94,6 +96,86 @@ function setView(name) {
     system: loadSystem
   };
   if (loaders[name]) loaders[name]();
+}
+
+function loadWorkflowView() {
+  updateScenarioForm();
+  document.getElementById("conversation-context-id").textContent = state.contextId.slice(0, 16) + "…";
+  loadCustomWorkflows();
+}
+
+function resetConversation() {
+  state.contextId = window.crypto && crypto.randomUUID
+    ? crypto.randomUUID()
+    : "ctx-" + Date.now().toString(36) + Math.random().toString(36).slice(2);
+  localStorage.setItem("agentic-context-id", state.contextId);
+  document.getElementById("conversation-context-id").textContent = state.contextId.slice(0, 16) + "…";
+  showToast("Conversación nueva; se conserva la memoria anterior.");
+}
+
+const exampleWorkflowDefinition = {
+  id: "consulta-ampliable",
+  name: "Consulta ampliable",
+  description: "Busca fuentes autorizadas, redacta una respuesta y guarda el resultado.",
+  version: "1.0.0",
+  steps: [
+    { id: "search", type: "knowledge.search", config: { query: "{{input.message}}", limit: 5 } },
+    { id: "draft", type: "model.generate", config: {
+      prompt: "Responde a {{input.message}} con estos resultados: {{steps.search.items}}"
+    } },
+    { id: "result", type: "result", config: { summary: "{{steps.draft.text}}" } }
+  ]
+};
+
+async function loadCustomWorkflows() {
+  const box = document.getElementById("custom-workflow-list");
+  if (!box) return;
+  box.innerHTML = '<div class="empty-state">Cargando flujos…</div>';
+  try {
+    const data = await api("/api/v1/workflows");
+    const items = data.items || [];
+    box.innerHTML = items.length ? items.map(function (item) {
+      return '<article class="custom-workflow-card" data-custom-workflow="' + escapeHtml(item.id) +
+        '"><div class="custom-workflow-heading"><div><strong>' + escapeHtml(item.name) +
+        '</strong><small>' + escapeHtml(item.id) + ' · v' + escapeHtml(item.version) +
+        '</small></div><span class="control-state">' + item.steps.length + ' pasos</span></div><p>' +
+        escapeHtml(item.description) + '</p><label>Entrada JSON</label><textarea class="custom-workflow-input" rows="3">{"message":"¿Qué documentación aplica?"}</textarea>' +
+        '<button class="button button-dark button-small" type="button" data-custom-run>Ejecutar flujo →</button></article>';
+    }).join("") : '<div class="empty-state">Aún no hay flujos declarativos. Puedes crear el primero con el editor JSON.</div>';
+  } catch (error) {
+    box.innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + "</div>";
+  }
+}
+
+async function saveCustomWorkflow() {
+  const errorBox = document.getElementById("custom-workflow-error");
+  errorBox.classList.add("hidden");
+  try {
+    const definition = JSON.parse(document.getElementById("custom-workflow-definition").value);
+    const saved = await api("/api/v1/workflows", {
+      method: "POST", body: JSON.stringify(definition)
+    });
+    showToast("Flujo " + saved.name + " guardado.");
+    await loadCustomWorkflows();
+  } catch (error) {
+    errorBox.textContent = error.message;
+    errorBox.classList.remove("hidden");
+  }
+}
+
+async function runCustomWorkflow(card) {
+  try {
+    const input = JSON.parse(card.querySelector(".custom-workflow-input").value || "{}");
+    const workflowId = card.dataset.customWorkflow;
+    const task = await api("/api/v1/workflows/" + encodeURIComponent(workflowId) + "/runs", {
+      method: "POST", body: JSON.stringify({ input: input, context_id: state.contextId })
+    });
+    showToast("Flujo iniciado: " + (statusNames[task.status] || task.status));
+    await Promise.all([loadOverview(), loadTasks()]);
+    await openTask(task.id);
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 function flowCell(scenario) {
@@ -170,9 +252,15 @@ async function loadApprovals() {
     const data = await api("/api/v1/approvals");
     const rows = data.items || [];
     box.innerHTML = rows.length ? rows.map(function (item) {
-      const sourceText = item.source === "jira"
-        ? "Jira en vivo · " + (item.issue_key || "incidencia")
-        : "Caso sintético local · no escribe en Jira";
+      const sourceText = item.source === "github"
+        ? "GitHub · " + item.owner + "/" + item.repository + "#" + item.issue_number
+        : item.source === "gmail"
+          ? "Gmail · Para " + (item.to || []).join(", ") + " · " + (item.subject || "sin asunto")
+          : item.source === "workflow"
+            ? "Flujo configurable · checkpoint reanudable"
+            : item.source === "jira"
+              ? "Jira en vivo · " + (item.issue_key || "incidencia")
+              : "Caso sintético local · no escribe en Jira";
       return '<article class="approval-card"><div class="eyebrow">BORRADOR DE ACCIÓN · ' +
         escapeHtml(item.task_id.slice(0, 10)) + '</div><h3>' + escapeHtml(item.task_title || "Incidencia") +
         '</h3><p>Solicitante: ' + escapeHtml(item.requested_by) +
@@ -255,7 +343,7 @@ async function loadQuality() {
       : new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", maximumFractionDigits: 5 }).format(usage.estimated_cost_usd);
     const numberLabel = function (value) { return new Intl.NumberFormat("es-ES").format(value || 0); };
     overview.insertAdjacentHTML("beforeend", '<article class="quality-card usage-card"><small>Llamadas a modelos</small><strong>' +
-      numberLabel(usage.calls) + '</strong><small>' + numberLabel(usage.successful_calls) + ' correctas · ventana de 1.000 tareas</small></article><article class="quality-card usage-card"><small>Fallbacks a reglas</small><strong>' +
+      numberLabel(usage.calls) + '</strong><small>' + numberLabel(usage.successful_calls) + ' correctas · histórico completo</small></article><article class="quality-card usage-card"><small>Fallbacks a reglas</small><strong>' +
       numberLabel(usage.fallback_calls) + '</strong><small>Timeout, respuesta inválida o error de proveedor</small></article><article class="quality-card usage-card"><small>Tokens entrada / salida</small><strong>' +
       numberLabel(usage.input_tokens) + ' / ' + numberLabel(usage.output_tokens) + '</strong><small>' + (usage.token_counts_complete ? "Conteos reportados por el proveedor" : "Conteo parcial según respuestas disponibles") + '</small></article><article class="quality-card usage-card"><small>Coste estimado</small><strong>' +
       escapeHtml(cost) + '</strong><small>' + (usage.pricing_configured ? "Según precios unitarios configurados" : "Configura las tarifas por millón de tokens") + '</small></article>');
@@ -266,7 +354,7 @@ async function loadQuality() {
       return '<article class="model-usage-row"><div><strong>' + escapeHtml(provider.provider) + '</strong><small>' + escapeHtml(provider.model) + '</small></div><span>' +
         numberLabel(provider.calls) + ' llamadas</span><span>' + numberLabel(provider.successful_calls) + ' correctas · ' + numberLabel(provider.fallback_calls) + ' fallback</span><span>' +
         numberLabel(provider.input_tokens) + ' / ' + numberLabel(provider.output_tokens) + ' tokens</span><span>' + escapeHtml(providerCost) + '</span></article>';
-    }).join("") : '<div class="empty-state">Aún no hay llamadas a proveedores de modelos en la ventana consultada.</div>';
+    }).join("") : '<div class="empty-state">Aún no hay llamadas a proveedores de modelos en el ledger.</div>';
     box.innerHTML = items.length ? items.map(function (item) {
       const checks = item.checks || [];
       const passedChecks = checks.filter(function (check) { return check.passed; }).length;
@@ -285,9 +373,25 @@ async function loadQuality() {
 
 async function loadActivity() {
   const box = document.getElementById("activity-list");
+  const chainStatus = document.getElementById("audit-chain-status");
   box.innerHTML = '<div class="empty-state">Cargando auditoría…</div>';
+  if (chainStatus) chainStatus.textContent = "Verificando cadena…";
   try {
-    const data = await api("/api/v1/activity");
+    const results = await Promise.all([
+      api("/api/v1/activity"),
+      api("/api/v1/audit/verify").catch(function () { return null; })
+    ]);
+    const data = results[0];
+    const verification = results[1];
+    if (chainStatus) {
+      chainStatus.textContent = !verification
+        ? "Verificación no autorizada"
+        : verification.valid
+          ? "Cadena íntegra · " + verification.entries + " entradas"
+          : "Cadena alterada · secuencia " + (verification.failure?.sequence || "?");
+      chainStatus.style.background = verification?.valid ? "#edf8f3" : "#fff2e7";
+      chainStatus.style.color = verification?.valid ? "#25816a" : "#a55235";
+    }
     const items = data.items || [];
     box.innerHTML = items.length ? items.map(function (item) {
       return '<div class="audit-row"><time>' + escapeHtml(dateLabel(item.created_at)) +
@@ -297,6 +401,7 @@ async function loadActivity() {
         '</span><span>' + statusBadge(item.decision) + '</span></div>';
     }).join("") : '<div class="empty-state">Todavía no hay acciones auditadas.</div>';
   } catch (error) {
+    if (chainStatus) chainStatus.textContent = "Verificación no disponible";
     box.innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + "</div>";
   }
 }
@@ -465,11 +570,15 @@ async function loadSystem() {
     const items = [
       ["Base de datos", data.database, true],
       ["Bus de eventos", data.event_bus, Boolean(data.event_bus)],
+      ["Consumidor de eventos", data.event_worker, data.event_worker === "running"],
+      ["Memoria conversacional", data.memory, true],
       ["Políticas", data.opa, true],
       ["Modelo", data.model.provider + " · " + data.model.model, data.model.configured],
       ["Jira", data.jira, data.jira === "configured"],
-      ["A2A", data.protocols.a2a, true],
-      ["MCP", data.protocols.mcp, true],
+      ["GitHub API", data.integrations.github ? "Token cargado desde el entorno" : "GITHUB_TOKEN ausente", data.integrations.github],
+      ["Gmail API", data.integrations.gmail ? "OAuth configurado" : "OAuth incompleto", data.integrations.gmail],
+      ["A2A SDK", data.protocols.a2a, true],
+      ["MCP SDK", data.protocols.mcp, true],
       ["Secretos en BD", data.secrets_in_database ? "sí" : "no", !data.secrets_in_database]
     ];
     box.innerHTML = items.map(function (item) {
@@ -479,7 +588,7 @@ async function loadSystem() {
         (item[2] ? "Listo" : "No configurado") + '</span></div><p>' +
         escapeHtml(item[1]) + "</p></article>";
     }).join("");
-    await loadConnectors();
+    await Promise.all([loadConnectors(), loadDataSources()]);
   } catch (error) {
     box.innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + "</div>";
     const connectorBox = document.getElementById("connectors-list");
@@ -561,6 +670,227 @@ async function registerConnector(event) {
     errorBox.classList.remove("hidden");
   } finally {
     submit.disabled = false;
+  }
+}
+
+async function loadDataSources() {
+  const box = document.getElementById("data-sources-list");
+  if (!box) return;
+  try {
+    const data = await api("/api/v1/data-sources");
+    const items = data.items || [];
+    const roles = (state.system && state.system.roles) || [];
+    const canManage = roles.includes("admin");
+    const canSync = roles.includes("admin") || roles.includes("operator");
+    box.innerHTML = items.length ? items.map(function (item) {
+      const status = item.enabled ? item.last_sync_status : "disabled";
+      const statusText = {
+        never: "Sin sincronizar", completed: "Sincronizada", streaming: "Lote procesado",
+        queued: "En cola", failed: "Error", disabled: "Desactivada"
+      }[status] || status;
+      const statusClass = ["completed", "streaming"].includes(status) ? "system-ok" :
+        ["failed", "disabled"].includes(status) ? "system-warn" : "control-state";
+      return '<article class="connector-card"><div class="connector-card-top"><span class="protocol-mark">' +
+        escapeHtml(item.kind.toUpperCase()) + '</span><span class="' + statusClass + '">' +
+        escapeHtml(statusText) + '</span></div><h3>' + escapeHtml(item.name) + '</h3><code class="connector-endpoint">' +
+        escapeHtml(item.endpoint || "sin ruta") + '</code><div class="connector-meta">Alcance: ' +
+        escapeHtml(item.scope) + ' · ' + escapeHtml(item.format.toUpperCase()) +
+        (item.auth_env ? " · secreto: " + escapeHtml(item.auth_configured ? "configurado" : item.auth_env) : "") +
+        (item.last_sync_at ? " · última actividad " + escapeHtml(dateLabel(item.last_sync_at)) : "") +
+        (item.last_sync_error ? " · " + escapeHtml(item.last_sync_error) : "") +
+        '</div><div class="connector-actions">' +
+        (item.enabled && canSync ? '<button class="button button-light button-small" data-source-sync="' +
+          escapeHtml(item.id) + '">Sincronizar</button>' : "") +
+        (canManage ? '<button class="button button-light button-small" data-source-disable="' +
+          escapeHtml(item.id) + '"' + (item.enabled ? "" : " disabled") + '>Desactivar</button>' : "") +
+        '</div></article>';
+    }).join("") : '<div class="empty-state">Aún no hay fuentes. Registra una API, CRM, ERP o archivo del lake.</div>';
+  } catch (error) {
+    box.innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + "</div>";
+  }
+}
+
+async function registerDataSource(event) {
+  event.preventDefault();
+  const errorBox = document.getElementById("data-source-error");
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  errorBox.classList.add("hidden");
+  submit.disabled = true;
+  try {
+    const options = JSON.parse(document.getElementById("data-source-options").value || "{}");
+    const authEnv = document.getElementById("data-source-auth").value.trim();
+    await api("/api/v1/data-sources", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: document.getElementById("data-source-kind").value,
+        name: document.getElementById("data-source-name").value.trim(),
+        endpoint: document.getElementById("data-source-endpoint").value.trim(),
+        auth_env: authEnv || null,
+        scope: document.getElementById("data-source-scope").value.trim(),
+        format: document.getElementById("data-source-format").value,
+        source_options: options
+      })
+    });
+    event.currentTarget.reset();
+    updateDataSourceForm();
+    showToast("Fuente registrada.");
+    await loadDataSources();
+  } catch (error) {
+    errorBox.textContent = error.message;
+    errorBox.classList.remove("hidden");
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function syncDataSource(id) {
+  try {
+    const result = await api("/api/v1/data-sources/" + encodeURIComponent(id) + "/sync", {
+      method: "POST"
+    });
+    showToast(result.status === "queued" ? "Sincronización en cola." :
+      "Fuente sincronizada: " + result.documents_updated + " documentos.");
+    await loadDataSources();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function disableDataSource(id) {
+  try {
+    await api("/api/v1/data-sources/" + encodeURIComponent(id), { method: "DELETE" });
+    showToast("Fuente desactivada.");
+    await loadDataSources();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function updateDataSourceForm() {
+  const lake = document.getElementById("data-source-kind").value === "data_lake";
+  const format = document.getElementById("data-source-format");
+  const endpoint = document.getElementById("data-source-endpoint");
+  const optionsBox = document.getElementById("data-source-options");
+  if (lake) {
+    if (!["csv", "parquet"].includes(format.value)) format.value = "csv";
+    endpoint.placeholder = "./documentos.csv";
+  } else {
+    if (["csv", "parquet"].includes(format.value)) format.value = "json";
+    endpoint.placeholder = "https://crm.example/api/records";
+  }
+  try {
+    const options = JSON.parse(optionsBox.value || "{}");
+    if (format.value === "odata" && options.records_path === "records" && !options.next_field) {
+      options.records_path = "value";
+      options.next_field = "@odata.nextLink";
+      optionsBox.value = JSON.stringify(options, null, 2);
+    } else if (
+      format.value !== "odata" &&
+      options.records_path === "value" &&
+      options.next_field === "@odata.nextLink"
+    ) {
+      options.records_path = "records";
+      delete options.next_field;
+      optionsBox.value = JSON.stringify(options, null, 2);
+    }
+  } catch (_) {
+    // The user is editing JSON; validation is reported when the source is saved.
+  }
+}
+
+async function searchGithub(event) {
+  event.preventDefault();
+  const box = document.getElementById("github-issues-list");
+  box.innerHTML = '<div class="empty-state">Buscando incidencias…</div>';
+  try {
+    const owner = document.getElementById("github-owner").value.trim();
+    const repository = document.getElementById("github-repository").value.trim();
+    const stateValue = document.getElementById("github-state").value;
+    const result = await api("/api/v1/integrations/github/" + encodeURIComponent(owner) + "/" +
+      encodeURIComponent(repository) + "/issues?state=" + encodeURIComponent(stateValue));
+    const items = result.items || [];
+    box.innerHTML = items.length ? items.map(function (item) {
+      return '<article class="integration-result"><strong>#' + escapeHtml(item.number) + " · " +
+        escapeHtml(item.title) + '</strong><small>' + escapeHtml(item.state) + " · " +
+        escapeHtml(item.user || "sin autor") + " · actualizada " + escapeHtml(dateLabel(item.updated_at)) +
+        '</small><p>' + escapeHtml(item.body || "Sin descripción") + "</p></article>";
+    }).join("") : '<div class="empty-state">No hay incidencias para este filtro.</div>';
+  } catch (error) {
+    box.innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + "</div>";
+  }
+}
+
+async function requestGithubComment(event) {
+  event.preventDefault();
+  try {
+    const owner = document.getElementById("github-owner").value.trim();
+    const repository = document.getElementById("github-repository").value.trim();
+    const number = document.getElementById("github-issue-number").value.trim();
+    const result = await api("/api/v1/integrations/github/" + encodeURIComponent(owner) + "/" +
+      encodeURIComponent(repository) + "/issues/" + encodeURIComponent(number) + "/comments", {
+      method: "POST",
+      body: JSON.stringify({ body: document.getElementById("github-comment-body").value })
+    });
+    event.currentTarget.reset();
+    showToast("Borrador enviado a aprobación: " + result.approval_id.slice(0, 10));
+    await loadApprovals();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function searchGmail(event) {
+  event.preventDefault();
+  const box = document.getElementById("gmail-messages-list");
+  box.innerHTML = '<div class="empty-state">Buscando mensajes…</div>';
+  try {
+    const query = document.getElementById("gmail-query").value.trim();
+    const result = await api("/api/v1/integrations/gmail/search?q=" + encodeURIComponent(query));
+    const items = result.messages || [];
+    box.innerHTML = items.length ? items.map(function (item) {
+      return '<button class="integration-result integration-message" type="button" data-gmail-message="' +
+        escapeHtml(item.id) + '"><strong>' + escapeHtml(item.subject || "(sin asunto)") +
+        '</strong><small>' + escapeHtml(item.from || "remitente desconocido") + " · " +
+        escapeHtml(dateLabel(item.date)) + '</small><p>' + escapeHtml(item.snippet || "") + "</p></button>";
+    }).join("") : '<div class="empty-state">No hay mensajes para esta búsqueda.</div>';
+  } catch (error) {
+    box.innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + "</div>";
+  }
+}
+
+async function showGmailMessage(id) {
+  const box = document.getElementById("gmail-message-detail");
+  box.innerHTML = '<div class="empty-state">Cargando mensaje…</div>';
+  try {
+    const message = await api("/api/v1/integrations/gmail/messages/" + encodeURIComponent(id));
+    box.innerHTML = '<article class="integration-result"><strong>' +
+      escapeHtml(message.subject || "(sin asunto)") + '</strong><small>De: ' +
+      escapeHtml(message.from || "desconocido") + " · Para: " + escapeHtml(message.to || "desconocido") +
+      '</small><pre>' + escapeHtml(message.body || message.snippet || "Sin contenido") + "</pre></article>";
+  } catch (error) {
+    box.innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + "</div>";
+  }
+}
+
+async function requestGmailSend(event) {
+  event.preventDefault();
+  try {
+    const to = document.getElementById("gmail-to").value.split(",").map(function (value) {
+      return value.trim();
+    }).filter(Boolean);
+    const result = await api("/api/v1/integrations/gmail/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        to: to,
+        subject: document.getElementById("gmail-subject").value.trim(),
+        body: document.getElementById("gmail-body").value
+      })
+    });
+    event.currentTarget.reset();
+    showToast("Borrador enviado a aprobación: " + result.approval_id.slice(0, 10));
+    await loadApprovals();
+  } catch (error) {
+    showToast(error.message);
   }
 }
 
@@ -669,7 +999,8 @@ async function submitTask(event) {
     const body = {
       scenario: scenario,
       message: document.getElementById("message").value,
-      artifacts: artifacts
+      artifacts: artifacts,
+      context_id: state.contextId
     };
     const issueKey = document.getElementById("issue-key").value.trim();
     if (scenario === "incident" && issueKey) body.issue_key = issueKey;
@@ -773,6 +1104,14 @@ document.addEventListener("click", function (event) {
   if (scenario) fillScenario(scenario.dataset.runScenario);
   const taskButton = event.target.closest("[data-task-open]");
   if (taskButton) openTask(taskButton.dataset.taskOpen);
+  const customRun = event.target.closest("[data-custom-run]");
+  if (customRun) runCustomWorkflow(customRun.closest("[data-custom-workflow]"));
+  const sourceSync = event.target.closest("[data-source-sync]");
+  if (sourceSync) syncDataSource(sourceSync.dataset.sourceSync);
+  const sourceDisable = event.target.closest("[data-source-disable]");
+  if (sourceDisable) disableDataSource(sourceDisable.dataset.sourceDisable);
+  const gmailMessage = event.target.closest("[data-gmail-message]");
+  if (gmailMessage) showGmailMessage(gmailMessage.dataset.gmailMessage);
   const decision = event.target.closest("[data-decision]");
   if (decision) decideApproval(decision.dataset.approvalId, decision.dataset.decision);
   const connectorTools = event.target.closest("[data-connector-tools]");
@@ -826,6 +1165,17 @@ document.addEventListener("click", function (event) {
 
 document.getElementById("scenario").addEventListener("change", updateScenarioForm);
 document.getElementById("task-form").addEventListener("submit", submitTask);
+document.getElementById("new-conversation").addEventListener("click", resetConversation);
+document.getElementById("save-custom-workflow").addEventListener("click", saveCustomWorkflow);
+document.getElementById("refresh-custom-workflows").addEventListener("click", loadCustomWorkflows);
+document.getElementById("data-source-form").addEventListener("submit", registerDataSource);
+document.getElementById("data-source-kind").addEventListener("change", updateDataSourceForm);
+document.getElementById("data-source-format").addEventListener("change", updateDataSourceForm);
+document.getElementById("refresh-data-sources").addEventListener("click", loadDataSources);
+document.getElementById("github-search-form").addEventListener("submit", searchGithub);
+document.getElementById("github-comment-form").addEventListener("submit", requestGithubComment);
+document.getElementById("gmail-search-form").addEventListener("submit", searchGmail);
+document.getElementById("gmail-send-form").addEventListener("submit", requestGmailSend);
 document.getElementById("menu-button").addEventListener("click", function () {
   document.getElementById("sidebar").classList.toggle("open");
 });
@@ -886,7 +1236,10 @@ document.addEventListener("keydown", function (event) {
 });
 
 state.token = localStorage.getItem("agentic-api-token") || "";
+localStorage.setItem("agentic-context-id", state.contextId);
 document.getElementById("api-token").value = state.token;
+document.getElementById("conversation-context-id").textContent = state.contextId.slice(0, 16) + "…";
+document.getElementById("custom-workflow-definition").value = JSON.stringify(exampleWorkflowDefinition, null, 2);
 updateScenarioForm();
 loadSystem().then(loadOverview);
 loadArchitecture().catch(function (error) {
@@ -894,6 +1247,10 @@ loadArchitecture().catch(function (error) {
   document.getElementById("architecture-scenarios").innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + '</div>';
 });
 document.getElementById("connector-kind").dispatchEvent(new Event("change"));
+updateDataSourceForm();
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/service-worker.js").catch(function () {});
+}
 window.setInterval(function () {
   if (state.view === "overview") loadOverview();
 }, 12000);

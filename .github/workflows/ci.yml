@@ -41,7 +41,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.11.4
-      - run: terraform fmt -check -recursive deploy/aws
+      - run: terraform fmt -check -diff -recursive deploy/aws
       - run: terraform -chdir=deploy/aws/state-backend init -backend=false
       - run: terraform -chdir=deploy/aws/state-backend validate
       - run: terraform -chdir=deploy/aws/production init -backend=false

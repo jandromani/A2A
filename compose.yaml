@@ -16,9 +16,18 @@ services:
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
       OPA_URL: ${OPA_URL:-}
       CONNECTOR_ALLOWED_HOSTS: ${CONNECTOR_ALLOWED_HOSTS:-}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai-compatible}
       MODEL_BASE_URL: ${MODEL_BASE_URL:-}
       MODEL_API_KEY: ${MODEL_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       MODEL_NAME: ${MODEL_NAME:-}
+      MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-1200}
+      MODEL_INPUT_COST_PER_MILLION: ${MODEL_INPUT_COST_PER_MILLION:-}
+      MODEL_OUTPUT_COST_PER_MILLION: ${MODEL_OUTPUT_COST_PER_MILLION:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai-compatible}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
@@ -83,6 +92,14 @@ services:
     ports:
       - "127.0.0.1:8081:8080"
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-model"]
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+
 volumes:
   postgres_data:
   valkey_data:
+  ollama_data:

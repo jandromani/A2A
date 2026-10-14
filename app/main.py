@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select, text
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.orm import Session
 
 from app.config import Settings, settings
@@ -63,6 +63,7 @@ from app.services import (
     serialize_task,
     task_events,
 )
+from app.usage import aggregate_model_usage
 
 ROOT = Path(__file__).resolve().parent
 
@@ -372,6 +373,26 @@ def create_app(config: Settings | None = None, database_url: str | None = None) 
         if not principal.roles.intersection({"admin", "operator", "approver"}):
             raise HTTPException(status_code=403, detail="Operator role required.")
         return {"items": list_evaluations(db)}
+
+    @app.get("/api/v1/usage")
+    def model_usage(
+        request: Request,
+        db: Session = Depends(get_db),
+        principal: Principal = Depends(get_principal),
+    ):
+        if not principal.roles.intersection({"admin", "operator", "approver"}):
+            raise HTTPException(status_code=403, detail="Operator role required.")
+        config = request.app.state.settings
+        results = db.scalars(
+            select(TaskRecord.result_json).order_by(desc(TaskRecord.created_at)).limit(1000)
+        ).all()
+        return aggregate_model_usage(
+            results,
+            pricing_configured=(
+                config.model_input_cost_per_million is not None
+                and config.model_output_cost_per_million is not None
+            ),
+        )
 
     @app.get("/api/v1/activity")
     def activity(

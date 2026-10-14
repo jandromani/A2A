@@ -8,7 +8,7 @@ La entrega cubre los tres recorridos descritos en el mapa:
 - **Inventario técnico**: lectura segura de archivos de configuración, extracción de declaraciones y vínculo de cada hecho con su archivo.
 - **Incidencia operativa**: consulta de Jira si se configura, borrador de actuación y aprobación humana antes de escribir.
 
-La consola web y la API funcionan en local con SQLite y reglas deterministas. PostgreSQL con pgvector, Valkey Streams, OPA, Keycloak, un modelo compatible con la API de OpenAI y Jira se activan mediante configuración. Las claves se leen del entorno y no se guardan en la base de datos.
+La consola web incluye el mapa maestro navegable (123 componentes, decisiones técnicas, criterios de aceptación, conexiones propuestas y tres recorridos guiados). La API funciona en local con SQLite y reglas deterministas. PostgreSQL con pgvector, Valkey Streams, OPA, Keycloak, Jira y proveedores OpenAI, Anthropic, Groq, Ollama u OpenAI-compatible se activan mediante configuración. Las claves se leen del entorno y no se guardan en la base de datos.
 
 La consola de Sistema también registra y prueba servidores MCP y agentes A2A remotos. Cada llamada remota queda auditada. En producción, los conectores salientes exigen HTTPS y un hostname incluido en `CONNECTOR_ALLOWED_HOSTS`.
 
@@ -37,6 +37,11 @@ Los servicios opcionales se pueden iniciar con perfiles:
 
 Para activar OPA, define OPA_URL=http://opa:8181 al iniciar el perfil governance. Para Keycloak, crea el realm y el cliente OIDC de la organización y configura OIDC_ISSUER_URL y OIDC_AUDIENCE.
 
+Para Ollama local, configura `MODEL_PROVIDER=ollama`, `MODEL_NAME=qwen3:4b` y `OLLAMA_BASE_URL=http://ollama:11434/v1` en `.env`; luego inicia el perfil y descarga el modelo:
+
+    docker compose --profile local-model up --build -d
+    docker compose exec ollama ollama pull qwen3:4b
+
 ## Flujos y controles
 
 El motor usa LangGraph para enlazar autorización, ejecución, evaluación, aprobación y registro. Las evaluaciones actuales son deterministas:
@@ -45,7 +50,9 @@ El motor usa LangGraph para enlazar autorización, ejecución, evaluación, apro
 - Inventario: comprueba procedencia por archivo y deja visible qué ficheros no se procesaron.
 - Incidencia: comprueba la fuente y exige aprobación humana para cualquier escritura.
 
-Sin modelo configurado, la respuesta utiliza reglas y evidencia local. Si se define MODEL_BASE_URL y MODEL_NAME, la síntesis puede usar cualquier endpoint compatible con chat completions; la evaluación y los controles de acceso continúan ejecutándose aparte.
+Sin modelo configurado, la respuesta utiliza reglas y evidencia local. Selecciona el proveedor con `MODEL_PROVIDER`. OpenAI, Anthropic y Groq usan sus endpoints oficiales y sus respectivas claves; Ollama usa la URL local configurada. `openai-compatible` conecta cualquier API que implemente chat completions mediante `MODEL_BASE_URL`. La síntesis del modelo no sustituye las evaluaciones ni los controles de acceso. Si el proveedor no está disponible, devuelve un error HTTP, agota el tiempo o responde en un formato inválido, el flujo conserva su resultado de reglas y registra la causa sin guardar el prompt ni la respuesta remota.
+
+La página **Calidad y consumo** muestra llamadas, fallbacks, tokens informados por el proveedor y coste estimado agregado por proveedor/modelo sobre las últimas 1.000 tareas. El coste solo se calcula si se configuran las tarifas de entrada y salida por millón de tokens; cuando una respuesta no informa tokens, el coste se marca como incompleto.
 
 El inspector técnico acepta XML Maven, package.json, Dockerfile, Gradle, go.mod y configuración YAML. Lee el contenido como texto; no ejecuta comandos, builds ni scripts.
 
@@ -80,6 +87,7 @@ La respuesta contiene un task id, estado, resultado estructurado y referencias a
 | GET | /api/v1/tasks/{id}/events | Historial del recorrido |
 | POST | /api/v1/approvals/{id}/decision | Aprobar o rechazar un borrador |
 | GET | /api/v1/evaluations | Resultados de evaluación |
+| GET | /api/v1/usage | Consumo agregado de modelos, tokens y coste estimado |
 | GET | /api/v1/activity | Auditoría de acciones |
 | GET | /api/v1/system | Estado sin revelar secretos |
 | GET/POST | /api/v1/connectors | Listar o registrar conectores A2A/MCP |
@@ -106,8 +114,13 @@ No se permite iniciar con ENVIRONMENT=production y AUTH_MODE=dev. La consola adm
 
 ## Variables opcionales
 
-- MODEL_BASE_URL, MODEL_NAME y MODEL_API_KEY: gateway de modelo compatible con chat completions.
-- EMBEDDING_BASE_URL, EMBEDDING_MODEL y EMBEDDING_API_KEY: endpoint compatible con embeddings (se solicitan vectores de 384 dimensiones para pgvector). Sin servicio externo, la indexación usa hashing local y la recuperación conserva una puntuación lexical.
+- MODEL_PROVIDER: `openai-compatible`, `openai`, `anthropic`, `groq` u `ollama`.
+- MODEL_BASE_URL y MODEL_NAME: URL (para `openai-compatible` o para sobrescribir una URL predeterminada) y nombre del modelo.
+- MODEL_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY y GROQ_API_KEY: claves de proveedor; el campo específico tiene prioridad sobre MODEL_API_KEY.
+- MODEL_MAX_TOKENS: límite de salida solicitado al proveedor.
+- MODEL_INPUT_COST_PER_MILLION y MODEL_OUTPUT_COST_PER_MILLION: tarifas en USD por millón de tokens para estimar consumo.
+- OLLAMA_BASE_URL: URL compatible con OpenAI de Ollama; dentro de Compose usa `http://ollama:11434/v1`.
+- EMBEDDING_PROVIDER, EMBEDDING_BASE_URL, EMBEDDING_MODEL y EMBEDDING_API_KEY: proveedor `openai`, `ollama` u `openai-compatible`; se solicitan vectores de 384 dimensiones para pgvector. OpenAI puede reutilizar OPENAI_API_KEY. Sin servicio externo, la indexación usa hashing local y la recuperación conserva una puntuación lexical.
 - DATABASE_URL: SQLite local o PostgreSQL.
 - COMPOSE_DATABASE_URL: base de datos que usará la aplicación cuando se despliegue con Compose. Por defecto apunta al PostgreSQL local.
 - REDIS_URL: publicación de eventos en streams Valkey; la copia duradera también queda en SQL.
@@ -121,5 +134,6 @@ No se permite iniciar con ENVIRONMENT=production y AUTH_MODE=dev. La consola adm
 
     ruff check app tests migrations
     pytest --cov=app --cov-report=term-missing
+    node --check app/static/app.js
 
 El workflow de GitHub Actions ejecuta estas comprobaciones con Python 3.11 y 3.12.

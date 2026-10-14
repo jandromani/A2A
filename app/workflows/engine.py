@@ -12,7 +12,7 @@ from app.config import Settings
 from app.embeddings import embedding_for, lexical_score
 from app.event_bus import publish_event, write_audit
 from app.jira import JiraConnector, JiraConnectorError
-from app.model_gateway import ModelGateway
+from app.model_gateway import ModelGateway, ModelResult
 from app.models import (
     ApprovalRecord,
     EvaluationRecord,
@@ -148,6 +148,7 @@ def _knowledge_result(state: WorkflowState) -> dict[str, Any]:
             }
         )
 
+    model_gateway = ModelGateway(state["config"])
     if not citations:
         answer = (
             "No encuentro una fuente autorizada que respalde una respuesta. "
@@ -155,6 +156,14 @@ def _knowledge_result(state: WorkflowState) -> dict[str, Any]:
         )
         if not allowed:
             answer = f"La política ha denegado la consulta a las fuentes: {reason}"
+        model_result = ModelResult(
+            text=None,
+            provider=model_gateway.provider,
+            model=state["config"].model_name,
+            attempted=False,
+            succeeded=False,
+            fallback_reason="no_authorized_evidence",
+        )
     else:
         evidence = "\n".join(f"- {item['title']}: {item['quote']}" for item in citations[:3])
         answer = (
@@ -163,18 +172,19 @@ def _knowledge_result(state: WorkflowState) -> dict[str, Any]:
             "el responsable directo aprueba el desplazamiento antes de reservar.\n\n"
             f"Evidencia consultada:\n{evidence}"
         )
-        model_answer = ModelGateway(state["config"]).complete(
+        model_result = model_gateway.generate(
             "Responde en español usando únicamente los fragmentos proporcionados. "
             "No inventes datos, plazos ni aprobadores. Si falta evidencia, dilo.",
             f"Pregunta:\n{query}\n\nFragmentos autorizados:\n{evidence}",
         )
-        if model_answer:
-            answer = model_answer
+        if model_result.text:
+            answer = model_result.text
     return {
         "answer": answer,
         "citations": citations,
         "scope_checked": sorted(state["principal"].scopes),
-        "summary_mode": "model" if ModelGateway(state["config"]).configured else "rules",
+        "summary_mode": "model" if model_result.succeeded else "rules",
+        "model_usage": model_result.as_dict(),
         "approval_required": False,
     }
 
@@ -353,18 +363,19 @@ def _incident_result(state: WorkflowState) -> dict[str, Any]:
             "Contrastar el estado en los sistemas de origen y actualizar el seguimiento "
             "solo después de que una persona responsable apruebe este borrador."
         )
-    model_draft = ModelGateway(state["config"]).complete(
+    model_result = ModelGateway(state["config"]).generate(
         "Prepara un borrador corto en español. Usa solo los hechos dados. "
         "No afirmes que se ha escrito en ningún sistema.",
         json.dumps(context, ensure_ascii=False),
     )
     return {
         "context": context,
-        "draft": model_draft or draft,
+        "draft": model_result.text or draft,
         "source": context["source"],
         "approval_required": True,
         "external_write": "pending human approval",
-        "summary_mode": "model" if model_draft else "rules",
+        "summary_mode": "model" if model_result.succeeded else "rules",
+        "model_usage": model_result.as_dict(),
     }
 
 

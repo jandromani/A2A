@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        env_ignore_empty=True,
         extra="ignore",
         case_sensitive=False,
     )
@@ -24,10 +25,21 @@ class Settings(BaseSettings):
     oidc_issuer_url: str | None = None
     oidc_audience: str | None = None
     model_base_url: str | None = None
-    model_api_key: str | None = None
+    model_provider: Literal["openai-compatible", "openai", "anthropic", "groq", "ollama"] = (
+        "openai-compatible"
+    )
+    model_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
     model_name: str | None = None
+    model_max_tokens: int = Field(default=1200, ge=1, le=32_000)
+    model_input_cost_per_million: float | None = Field(default=None, ge=0)
+    model_output_cost_per_million: float | None = Field(default=None, ge=0)
+    ollama_base_url: str = "http://localhost:11434/v1"
+    embedding_provider: Literal["openai-compatible", "openai", "ollama"] = "openai-compatible"
     embedding_base_url: str | None = None
-    embedding_api_key: str | None = None
+    embedding_api_key: SecretStr | None = None
     embedding_model: str | None = None
     jira_base_url: str | None = None
     jira_email: str | None = None

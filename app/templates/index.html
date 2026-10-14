@@ -25,6 +25,7 @@
         <button class="nav-item" data-view="approvals"><span class="nav-icon">✓</span>Aprobaciones <b class="nav-count" id="approval-count">0</b></button>
         <p class="nav-label nav-spaced">PLATAFORMA</p>
         <button class="nav-item" data-view="catalog"><span class="nav-icon">▦</span>Catálogo</button>
+        <button class="nav-item" data-view="architecture"><span class="nav-icon">⌘</span>Mapa maestro</button>
         <button class="nav-item" data-view="quality"><span class="nav-icon">◷</span>Evaluación</button>
         <button class="nav-item" data-view="activity"><span class="nav-icon">≋</span>Auditoría</button>
         <button class="nav-item" data-view="system"><span class="nav-icon">⚙</span>Sistema</button>
@@ -151,9 +152,24 @@
         <div id="knowledge-list" class="knowledge-grid"><div class="empty-state">Cargando fuentes…</div></div>
       </section>
 
+      <section class="view" id="view-architecture">
+        <div class="page-heading"><div><p class="eyebrow">ARQUITECTURA · 123 COMPONENTES</p><h1>Mapa maestro</h1><p class="page-subtitle">Explora las capas, las tecnologías elegidas, los límites y las conexiones que el diseño deja pendientes de validar.</p></div><button class="button button-dark" data-view-link="workflows">Probar un recorrido →</button></div>
+        <div class="architecture-toolbar panel">
+          <label class="architecture-search"><span>⌕</span><input id="architecture-search" type="search" placeholder="Buscar componente o tecnología…" aria-label="Buscar en el mapa"></label>
+          <div id="architecture-categories" class="architecture-categories"></div>
+          <div class="architecture-tools"><button class="button button-light button-small" id="architecture-zoom-out" aria-label="Alejar">−</button><button class="button button-light button-small" id="architecture-zoom-reset">Ajustar</button><button class="button button-light button-small" id="architecture-zoom-in" aria-label="Acercar">＋</button><label class="architecture-links-toggle"><input type="checkbox" id="architecture-links" checked> Conexiones propuestas</label></div>
+        </div>
+        <div class="architecture-layout">
+          <section class="panel architecture-map-panel" aria-label="Mapa interactivo de arquitectura"><div class="architecture-map-scroll"><svg id="architecture-map" viewBox="0 0 2112 960" role="group" aria-label="Mapa de arquitectura con componentes seleccionables"><g id="architecture-edges"></g><g id="architecture-nodes"></g></svg></div><div class="architecture-map-legend"><span><i class="legend-square"></i>Componente</span><span><i class="legend-line"></i>Conexión del diseño</span><span><i class="legend-line proposed"></i>Configuración propuesta</span><span id="architecture-count">Cargando 123 componentes…</span></div></section>
+          <aside class="panel architecture-inspector" id="architecture-detail" aria-live="polite"><div class="empty-state">Selecciona una pieza del mapa para ver su responsabilidad, tecnología, criterio de aceptación y configuración.</div></aside>
+        </div>
+        <section class="panel architecture-scenario-panel"><div class="panel-heading"><div><p class="eyebrow">RECORRIDOS GUIADOS</p><h2>Así atraviesa el sistema cada caso</h2></div><span class="data-pill">3 escenarios · 25 pasos</span></div><div id="architecture-scenarios" class="architecture-scenarios"><div class="empty-state">Cargando recorridos…</div></div></section>
+      </section>
+
       <section class="view" id="view-quality">
-        <div class="page-heading"><div><p class="eyebrow">EVALUACIÓN</p><h1>Calidad y pruebas</h1><p class="page-subtitle">Criterios deterministas ejecutados con cada tarea.</p></div></div>
+        <div class="page-heading"><div><p class="eyebrow">EVALUACIÓN Y USO</p><h1>Calidad y consumo</h1><p class="page-subtitle">Resultados deterministas y consumo agregado de modelos, sin guardar prompts ni respuestas del proveedor.</p></div></div>
         <div class="quality-overview" id="quality-overview"></div>
+        <section class="panel model-usage-panel"><div class="panel-heading"><div><p class="eyebrow">CONSUMO POR PROVEEDOR</p><h2>Ventana de las últimas 1.000 tareas</h2></div><span class="data-pill">Tokens · fallbacks · coste estimado</span></div><div id="model-usage-detail" class="model-usage-detail"><div class="empty-state">Cargando consumo de modelos…</div></div></section>
         <section class="panel"><div class="panel-heading"><div><p class="eyebrow">RESULTADOS POR TAREA</p><h2>Últimas evaluaciones</h2></div></div><div id="evaluations-list" class="evaluation-list"><div class="empty-state">Cargando evaluaciones…</div></div></section>
       </section>
 

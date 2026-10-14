@@ -1,6 +1,11 @@
 "use strict";
 
-const state = { view: "overview", catalogKind: "all", token: "", system: null };
+const state = {
+  view: "overview", catalogKind: "all", token: "", system: null,
+  architecture: null, architectureCategory: "all", architectureQuery: "",
+  architectureSelected: "", architectureZoom: 1, architectureLinks: true,
+  architectureScenario: 0, architectureScenarioStep: 0, architectureActiveNodes: []
+};
 const scenarioNames = {
   knowledge: "Conocimiento corporativo",
   report: "Inventario técnico",
@@ -232,15 +237,36 @@ async function loadCatalog() {
 async function loadQuality() {
   const box = document.getElementById("evaluations-list");
   const overview = document.getElementById("quality-overview");
+  const usageBox = document.getElementById("model-usage-detail");
   box.innerHTML = '<div class="empty-state">Cargando evaluaciones…</div>';
+  usageBox.innerHTML = '<div class="empty-state">Cargando consumo de modelos…</div>';
   try {
-    const data = await api("/api/v1/evaluations");
+    const results = await Promise.all([api("/api/v1/evaluations"), api("/api/v1/usage")]);
+    const data = results[0];
+    const usage = results[1];
     const items = data.items || [];
     const passed = items.filter(function (item) { return item.passed; }).length;
     const percent = items.length ? Math.round(100 * passed / items.length) : null;
     overview.innerHTML = '<article class="quality-card"><small>Ejecuciones evaluadas</small><strong>' +
       items.length + '</strong><small>Suites deterministas</small></article><article class="quality-card"><small>Evaluaciones aprobadas</small><strong>' +
       (percent == null ? "—" : percent + "%") + '</strong><small>Global · últimos resultados</small></article><article class="quality-card"><small>Controles principales</small><strong>3</strong><small>Permisos · procedencia · aprobación</small></article>';
+    const cost = usage.estimated_cost_usd == null
+      ? (usage.pricing_configured ? "Incompleto" : "No configurado")
+      : new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", maximumFractionDigits: 5 }).format(usage.estimated_cost_usd);
+    const numberLabel = function (value) { return new Intl.NumberFormat("es-ES").format(value || 0); };
+    overview.insertAdjacentHTML("beforeend", '<article class="quality-card usage-card"><small>Llamadas a modelos</small><strong>' +
+      numberLabel(usage.calls) + '</strong><small>' + numberLabel(usage.successful_calls) + ' correctas · ventana de 1.000 tareas</small></article><article class="quality-card usage-card"><small>Fallbacks a reglas</small><strong>' +
+      numberLabel(usage.fallback_calls) + '</strong><small>Timeout, respuesta inválida o error de proveedor</small></article><article class="quality-card usage-card"><small>Tokens entrada / salida</small><strong>' +
+      numberLabel(usage.input_tokens) + ' / ' + numberLabel(usage.output_tokens) + '</strong><small>' + (usage.token_counts_complete ? "Conteos reportados por el proveedor" : "Conteo parcial según respuestas disponibles") + '</small></article><article class="quality-card usage-card"><small>Coste estimado</small><strong>' +
+      escapeHtml(cost) + '</strong><small>' + (usage.pricing_configured ? "Según precios unitarios configurados" : "Configura las tarifas por millón de tokens") + '</small></article>');
+    const providers = usage.providers || [];
+    usageBox.innerHTML = providers.length ? providers.map(function (provider) {
+      const providerCost = provider.estimated_cost_usd == null ? "—" :
+        new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", maximumFractionDigits: 5 }).format(provider.estimated_cost_usd);
+      return '<article class="model-usage-row"><div><strong>' + escapeHtml(provider.provider) + '</strong><small>' + escapeHtml(provider.model) + '</small></div><span>' +
+        numberLabel(provider.calls) + ' llamadas</span><span>' + numberLabel(provider.successful_calls) + ' correctas · ' + numberLabel(provider.fallback_calls) + ' fallback</span><span>' +
+        numberLabel(provider.input_tokens) + ' / ' + numberLabel(provider.output_tokens) + ' tokens</span><span>' + escapeHtml(providerCost) + '</span></article>';
+    }).join("") : '<div class="empty-state">Aún no hay llamadas a proveedores de modelos en la ventana consultada.</div>';
     box.innerHTML = items.length ? items.map(function (item) {
       const checks = item.checks || [];
       const passedChecks = checks.filter(function (check) { return check.passed; }).length;
@@ -273,6 +299,160 @@ async function loadActivity() {
   } catch (error) {
     box.innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + "</div>";
   }
+}
+
+const architectureColors = {
+  foundation: "#b85b42", channels: "#286fd0", assets: "#178f80",
+  data: "#7955b5", execution: "#258b91", control: "#b87520", external: "#53677f"
+};
+
+async function loadArchitecture() {
+  if (state.architecture) return;
+  const response = await fetch("/static/architecture.json", { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error("No se pudo cargar el mapa de arquitectura.");
+  state.architecture = await response.json();
+  const categories = document.getElementById("architecture-categories");
+  categories.innerHTML = '<button class="architecture-category active" data-architecture-category="all">Todas <small>' +
+    state.architecture.nodes.length + '</small></button>' +
+    Object.entries(state.architecture.categories).map(function (entry) {
+      const count = state.architecture.nodes.filter(function (node) { return node.category === entry[0]; }).length;
+      return '<button class="architecture-category" data-architecture-category="' + escapeHtml(entry[0]) + '">' +
+        escapeHtml(entry[1]) + ' <small>' + count + '</small></button>';
+    }).join("");
+  renderArchitectureMap();
+  renderArchitectureScenarios();
+}
+
+function architectureMatches(node) {
+  const categoryMatch = state.architectureCategory === "all" || node.category === state.architectureCategory;
+  const query = state.architectureQuery.trim().toLocaleLowerCase("es");
+  const extra = state.architecture.extra[node.id] || {};
+  const searchable = [node.label, node.desc, node.value, node.example, node.question,
+    ...(node.tech || []), extra.main, extra.alternatives, extra.implementation]
+    .filter(Boolean).join(" ").toLocaleLowerCase("es");
+  return categoryMatch && (!query || searchable.includes(query));
+}
+
+function renderArchitectureMap() {
+  const data = state.architecture;
+  if (!data) return;
+  const edgeBox = document.getElementById("architecture-edges");
+  const nodeBox = document.getElementById("architecture-nodes");
+  edgeBox.innerHTML = data.edges.map(function (edge) {
+    const id = edge[0];
+    return '<path class="architecture-edge" data-architecture-edge="' + escapeHtml(id) + '" d="' +
+      escapeHtml(edge[1]) + '" aria-hidden="true"></path>';
+  }).join("") + (state.architectureLinks ? data.connections.map(function (edge) {
+    const color = edge.type === "api" ? "#286fd0" : edge.type === "event" || edge.type === "mcp" || edge.type === "a2a" ? "#098a83" : "#b87520";
+    return '<path class="architecture-proposed-edge" stroke="' + color + '" d="' + escapeHtml(edge.path) + '" aria-hidden="true"><title>' +
+      escapeHtml(edge.source + " → " + edge.target + " · " + edge.status) + '</title></path>';
+  }).join("") : "");
+  nodeBox.innerHTML = data.nodes.map(function (node) {
+    const color = architectureColors[node.category] || "#53677f";
+    const extra = data.extra[node.id] || {};
+    const match = architectureMatches(node);
+    const selected = state.architectureSelected === node.id;
+    const active = state.architectureActiveNodes.includes(node.id);
+    const frame = node.kind === "frame";
+    const radius = frame ? 12 : node.kind === "group" ? 9 : 5;
+    const inset = frame ? 1 : 0.5;
+    const maxChars = Math.max(9, Math.floor((node.w - 12) / (frame ? 8 : 5.4)));
+    const words = String(node.label).split(/\s+/);
+    const lines = [];
+    let line = "";
+    words.forEach(function (word) {
+      if (line && (line + " " + word).length > maxChars) { lines.push(line); line = word; }
+      else line = line ? line + " " + word : word;
+    });
+    if (line) lines.push(line);
+    const fontSize = frame ? 13 : node.kind === "group" ? 10 : 8;
+    const lineHeight = frame ? 16 : 10;
+    const firstY = node.y + node.h / 2 - ((lines.length - 1) * lineHeight) / 2 + fontSize * 0.34;
+    const labels = lines.slice(0, 3).map(function (text, index) {
+      return '<tspan x="' + (node.x + node.w / 2) + '" y="' + (firstY + index * lineHeight) + '">' + escapeHtml(text) + '</tspan>';
+    }).join("");
+    return '<g class="architecture-node' + (match ? "" : " arch-dim") + (selected ? " arch-selected" : "") +
+      (active ? " arch-scenario-active" : "") + '" data-architecture-node="' + escapeHtml(node.id) +
+      '" tabindex="0" role="button" aria-label="' + escapeHtml(node.label + ": " + node.desc) + '">' +
+      '<rect x="' + node.x + '" y="' + node.y + '" width="' + node.w + '" height="' + node.h + '" rx="' + radius +
+      '" fill="' + (frame ? color + "12" : "#ffffff") + '" stroke="' + color + '" stroke-width="' + (selected ? 3 : frame ? 2 : 1.4) + '"/>' +
+      (extra.decision ? '<circle cx="' + (node.x + node.w - 8) + '" cy="' + (node.y + 8) + '" r="3" fill="' + color + '"/>' : "") +
+      '<text text-anchor="middle" font-size="' + fontSize + '" font-weight="' + (frame || node.kind === "group" ? 750 : 600) + '" fill="#26364b">' + labels + '</text></g>';
+  }).join("");
+  const svg = document.getElementById("architecture-map");
+  const width = 2112 / state.architectureZoom;
+  const height = 960 / state.architectureZoom;
+  svg.setAttribute("viewBox", ((2112 - width) / 2) + " " + ((960 - height) / 2) + " " + width + " " + height);
+  const visible = data.nodes.filter(architectureMatches).length;
+  document.getElementById("architecture-count").textContent = visible + " de " + data.nodes.length + " componentes";
+  document.querySelectorAll("[data-architecture-category]").forEach(function (button) {
+    button.classList.toggle("active", button.dataset.architectureCategory === state.architectureCategory);
+  });
+  if (state.architectureSelected) showArchitectureDetail(state.architectureSelected);
+}
+
+function showArchitectureDetail(id) {
+  const data = state.architecture;
+  const node = data && data.nodes.find(function (item) { return item.id === id; });
+  if (!node) return;
+  state.architectureSelected = id;
+  const extra = data.extra[id] || {};
+  const category = data.categories[node.category] || node.category;
+  const links = data.connections.filter(function (edge) { return edge.source === id || edge.target === id; });
+  const list = function (values) {
+    return values && values.length ? '<ul>' + values.map(function (value) { return '<li>' + escapeHtml(value) + '</li>'; }).join("") + '</ul>' : "";
+  };
+  document.getElementById("architecture-detail").innerHTML =
+    '<div class="architecture-detail-head"><span class="architecture-detail-category" style="--arch-color:' +
+    (architectureColors[node.category] || "#53677f") + '">' + escapeHtml(category) + '</span>' +
+    (extra.decision ? '<span class="architecture-decision">' + escapeHtml(extra.decision) + '</span>' : "") + '</div>' +
+    '<h2>' + escapeHtml(node.label) + '</h2><p class="architecture-node-desc">' + escapeHtml(node.desc || "") + '</p>' +
+    (node.value ? '<section><h3>Valor</h3><p>' + escapeHtml(node.value) + '</p></section>' : "") +
+    (node.example ? '<section><h3>Ejemplo del mapa</h3><p>' + escapeHtml(node.example) + '</p></section>' : "") +
+    (extra.main ? '<section><h3>Tecnología seleccionada</h3><p class="architecture-tech-main">' + escapeHtml(extra.main) + '</p>' +
+      (extra.alternatives ? '<p><strong>Alternativas:</strong> ' + escapeHtml(extra.alternatives) + '</p>' : "") + '</section>' :
+      (node.tech && node.tech.length ? '<section><h3>Tecnologías consideradas</h3>' + list(node.tech) + '</section>' : "")) +
+    (extra.implementation ? '<section><h3>Cómo se implementa</h3><p>' + escapeHtml(extra.implementation) + '</p></section>' : "") +
+    (extra.gate ? '<section class="architecture-gate"><h3>Criterio de aceptación</h3><p>' + escapeHtml(extra.gate) + '</p></section>' : "") +
+    (links.length ? '<section><h3>Configuración de conexiones propuestas</h3><p class="architecture-fine">Son nombres de variables, nunca valores de secretos.</p>' +
+      links.map(function (edge) {
+        const peer = data.nodes.find(function (item) { return item.id === (edge.source === id ? edge.target : edge.source); });
+        const fields = [...(edge.env || []), ...(edge.secrets || [])];
+        return '<article class="architecture-link-card"><strong>' + escapeHtml(peer ? peer.label : edge.target) + '</strong><small>' +
+          escapeHtml(edge.status) + '</small>' + (fields.length ? '<code>' + escapeHtml(fields.join(" · ")) + '</code>' : "") + '</article>';
+      }).join("") + '</section>' : "") +
+    (extra.repo ? '<p class="architecture-fine">Repositorio de referencia indicado en el mapa: <code>' + escapeHtml(extra.repo) + '</code></p>' : "");
+  document.querySelectorAll("[data-architecture-node]").forEach(function (item) {
+    item.classList.toggle("arch-selected", item.dataset.architectureNode === id);
+  });
+}
+
+function renderArchitectureScenarios() {
+  const data = state.architecture;
+  if (!data) return;
+  const scenario = data.scenarios[state.architectureScenario] || data.scenarios[0];
+  const steps = scenario.steps || [];
+  state.architectureScenarioStep = Math.min(state.architectureScenarioStep, steps.length - 1);
+  const step = steps[state.architectureScenarioStep] || steps[0];
+  state.architectureActiveNodes = step.active || [];
+  document.getElementById("architecture-scenarios").innerHTML =
+    '<div class="architecture-scenario-tabs">' + data.scenarios.map(function (item, index) {
+      return '<button class="architecture-scenario-tab' + (index === state.architectureScenario ? " active" : "") +
+        '" data-architecture-scenario="' + index + '"><strong>' + escapeHtml(item.name) + '</strong><small>' + escapeHtml(item.short) + '</small></button>';
+    }).join("") + '</div><div class="architecture-scenario-body"><nav class="architecture-step-list" aria-label="Pasos del recorrido">' +
+    steps.map(function (item, index) {
+      return '<button class="architecture-step' + (index === state.architectureScenarioStep ? " active" : "") +
+        (index < state.architectureScenarioStep ? " complete" : "") + '" data-architecture-step="' + index + '"><span>' +
+        (index < state.architectureScenarioStep ? "✓" : String(index + 1).padStart(2, "0")) + '</span><strong>' + escapeHtml(item.title) + '</strong></button>';
+    }).join("") + '</nav><article class="architecture-step-detail"><div class="architecture-step-progress">PASO ' +
+    (state.architectureScenarioStep + 1) + ' / ' + steps.length + '</div><h3>' + escapeHtml(step.title) + '</h3><p>' + escapeHtml(step.text) + '</p>' +
+    (step.evidence ? '<pre>' + escapeHtml(step.evidence) + '</pre>' : "") +
+    (step.value ? '<p class="architecture-step-value"><strong>Valor:</strong> ' + escapeHtml(step.value) + '</p>' : "") +
+    '<div class="architecture-step-actions"><button class="button button-light button-small" data-architecture-step-prev ' +
+    (state.architectureScenarioStep === 0 ? "disabled" : "") + '>← Anterior</button><button class="button button-dark button-small" data-run-scenario="' +
+    escapeHtml(scenario.id) + '">Probar en la plataforma →</button><button class="button button-light button-small" data-architecture-step-next ' +
+    (state.architectureScenarioStep >= steps.length - 1 ? "disabled" : "") + '>Siguiente →</button></div></article></div>';
+  renderArchitectureMap();
 }
 
 async function loadSystem() {
@@ -601,6 +781,36 @@ document.addEventListener("click", function (event) {
   if (connectorInvoke) invokeConnector(connectorInvoke.dataset.connectorInvoke, connectorInvoke.dataset.connectorKind);
   const connectorToggle = event.target.closest("[data-connector-toggle]");
   if (connectorToggle) toggleConnector(connectorToggle.dataset.connectorToggle, connectorToggle.dataset.connectorEnable === "true");
+  const architectureCategory = event.target.closest("[data-architecture-category]");
+  if (architectureCategory) {
+    state.architectureCategory = architectureCategory.dataset.architectureCategory;
+    renderArchitectureMap();
+  }
+  const architectureNode = event.target.closest("[data-architecture-node]");
+  if (architectureNode) {
+    state.architectureSelected = architectureNode.dataset.architectureNode;
+    renderArchitectureMap();
+  }
+  const architectureScenario = event.target.closest("[data-architecture-scenario]");
+  if (architectureScenario) {
+    state.architectureScenario = Number(architectureScenario.dataset.architectureScenario);
+    state.architectureScenarioStep = 0;
+    renderArchitectureScenarios();
+  }
+  const architectureStep = event.target.closest("[data-architecture-step]");
+  if (architectureStep) {
+    state.architectureScenarioStep = Number(architectureStep.dataset.architectureStep);
+    renderArchitectureScenarios();
+  }
+  if (event.target.closest("[data-architecture-step-prev]")) {
+    state.architectureScenarioStep = Math.max(0, state.architectureScenarioStep - 1);
+    renderArchitectureScenarios();
+  }
+  if (event.target.closest("[data-architecture-step-next]")) {
+    const scenario = state.architecture.scenarios[state.architectureScenario];
+    state.architectureScenarioStep = Math.min(scenario.steps.length - 1, state.architectureScenarioStep + 1);
+    renderArchitectureScenarios();
+  }
   const tab = event.target.closest("[data-catalog-kind]");
   if (tab) {
     state.catalogKind = tab.dataset.catalogKind;
@@ -630,6 +840,29 @@ document.getElementById("clear-token").addEventListener("click", function () {
 });
 document.getElementById("connector-form").addEventListener("submit", registerConnector);
 document.getElementById("refresh-connectors").addEventListener("click", loadConnectors);
+document.getElementById("architecture-search").addEventListener("input", function (event) {
+  state.architectureQuery = event.currentTarget.value;
+  renderArchitectureMap();
+});
+document.getElementById("architecture-links").addEventListener("change", function (event) {
+  state.architectureLinks = event.currentTarget.checked;
+  renderArchitectureMap();
+});
+document.getElementById("architecture-zoom-in").addEventListener("click", function () {
+  state.architectureZoom = Math.min(2.5, state.architectureZoom * 1.2);
+  renderArchitectureMap();
+});
+document.getElementById("architecture-zoom-out").addEventListener("click", function () {
+  state.architectureZoom = Math.max(0.65, state.architectureZoom / 1.2);
+  renderArchitectureMap();
+});
+document.getElementById("architecture-zoom-reset").addEventListener("click", function () {
+  state.architectureZoom = 1;
+  state.architectureCategory = "all";
+  state.architectureQuery = "";
+  document.getElementById("architecture-search").value = "";
+  renderArchitectureMap();
+});
 document.getElementById("connector-kind").addEventListener("change", function (event) {
   const visible = event.currentTarget.value === "mcp";
   document.querySelectorAll(".mcp-version-label,.mcp-version-control").forEach(function (item) {
@@ -642,12 +875,24 @@ document.getElementById("token-button").addEventListener("click", function () {
 });
 document.addEventListener("keydown", function (event) {
   if (event.key === "Escape") document.getElementById("task-modal").classList.add("hidden");
+  if (event.key === "Enter" || event.key === " ") {
+    const node = event.target.closest && event.target.closest("[data-architecture-node]");
+    if (node) {
+      event.preventDefault();
+      showArchitectureDetail(node.dataset.architectureNode);
+      renderArchitectureMap();
+    }
+  }
 });
 
 state.token = localStorage.getItem("agentic-api-token") || "";
 document.getElementById("api-token").value = state.token;
 updateScenarioForm();
 loadSystem().then(loadOverview);
+loadArchitecture().catch(function (error) {
+  document.getElementById("architecture-count").textContent = error.message;
+  document.getElementById("architecture-scenarios").innerHTML = '<div class="empty-state">' + escapeHtml(error.message) + '</div>';
+});
 document.getElementById("connector-kind").dispatchEvent(new Event("change"));
 window.setInterval(function () {
   if (state.view === "overview") loadOverview();

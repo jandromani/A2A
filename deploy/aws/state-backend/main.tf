@@ -1,5 +1,6 @@
 terraform {
   required_version = ">= 1.10.0"
+  backend "s3" {}
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -30,6 +31,11 @@ resource "aws_kms_key" "state" {
   description             = "Encryption key for A2A Terraform state"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+}
+
+resource "aws_kms_alias" "state" {
+  name          = "alias/a2a-state-tfstate"
+  target_key_id = aws_kms_key.state.key_id
 }
 
 resource "aws_s3_bucket" "state" {

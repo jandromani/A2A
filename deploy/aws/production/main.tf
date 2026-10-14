@@ -262,6 +262,39 @@ resource "aws_eks_addon" "core" {
   depends_on                  = [aws_eks_node_group.platform]
 }
 
+resource "aws_iam_role" "ebs_csi" {
+  name = "${var.name}-ebs-csi"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = aws_iam_openid_connect_provider.eks.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = { StringEquals = {
+        "${local.oidc_host}:aud" = "sts.amazonaws.com"
+        "${local.oidc_host}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+      } }
+    }]
+  })
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi" {
+  role       = aws_iam_role.ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicyV2"
+}
+
+resource "aws_eks_addon" "ebs_csi" {
+  cluster_name                = aws_eks_cluster.platform.name
+  addon_name                  = "aws-ebs-csi-driver"
+  service_account_role_arn    = aws_iam_role.ebs_csi.arn
+  resolve_conflicts_on_update = "PRESERVE"
+  depends_on = [
+    aws_eks_node_group.platform,
+    aws_iam_role_policy_attachment.ebs_csi,
+  ]
+}
+
 resource "aws_ecr_repository" "application" {
   name                 = "${var.name}/application"
   image_tag_mutability = "IMMUTABLE"

@@ -23,12 +23,14 @@ ROLE_ACTIONS = {
     "data.source.sync": {"operator", "admin"},
     "data.source.write": {"operator", "admin"},
     "workflow.manage": {"admin"},
-    "identity.manage": {"admin"},
+    "advisor.review": {"operator", "approver", "admin"},
+    "identity.manage": {"admin", "identity-manager"},
     "workflow.run": {"employee", "operator", "admin"},
     "integration.github.read": {"employee", "operator", "approver", "admin"},
     "integration.github.request_write": {"employee", "operator", "approver", "admin"},
     "integration.gmail.read": {"employee", "operator", "approver", "admin"},
     "integration.gmail.request_send": {"employee", "operator", "approver", "admin"},
+    "integration.api.request_write": {"employee", "operator", "approver", "admin"},
 }
 
 

@@ -97,7 +97,14 @@ allow if {
 
 allow if {
   input.action == "identity.manage"
-  "admin" in input.actor.roles
+  some role in input.actor.roles
+  role in {"admin", "identity-manager"}
+}
+
+allow if {
+  input.action == "advisor.review"
+  some role in input.actor.roles
+  role in {"operator", "approver", "admin"}
 }
 
 allow if {
@@ -115,6 +122,13 @@ allow if {
 
 allow if {
   input.action in {"integration.gmail.read", "integration.gmail.request_send"}
+  some role in input.actor.roles
+  role in {"employee", "operator", "approver", "admin"}
+  scope_allowed
+}
+
+allow if {
+  input.action == "integration.api.request_write"
   some role in input.actor.roles
   role in {"employee", "operator", "approver", "admin"}
   scope_allowed

@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: a2a-db-bootstrap-@@RELEASE_SUFFIX@@
+  namespace: a2a
+  labels:
+    app: a2a-db-bootstrap
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: a2a-db-bootstrap
+    spec:
+      restartPolicy: Never
+      serviceAccountName: a2a-db-migrator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: "@@A2A_IMAGE@@"
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, app.database_bootstrap]
+          envFrom:
+            - configMapRef:
+                name: a2a-platform
+          env:
+            - name: VAULT_KUBERNETES_ROLE
+              value: a2a-db-migrator
+            - name: DATABASE_URL
+              value: vault://a2a/production/database-admin#url
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

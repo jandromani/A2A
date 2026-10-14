@@ -185,6 +185,8 @@ class ConnectorRecord(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     endpoint: Mapped[str] = mapped_column(String(1000))
     auth_env: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    auth_header_name: Mapped[str] = mapped_column(String(80), default="Authorization")
+    auth_prefix: Mapped[str] = mapped_column(String(80), default="Bearer ")
     protocol_version: Mapped[str] = mapped_column(String(40), default="2026-07-28")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_invoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

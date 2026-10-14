@@ -48,6 +48,16 @@ output "postgres_port" {
   description = "RDS PostgreSQL port."
 }
 
+output "postgres_allocated_storage_gb" {
+  value       = aws_db_instance.platform.allocated_storage
+  description = "Current RDS allocation used to size an isolated backup restore check."
+}
+
+output "postgres_max_allocated_storage_gb" {
+  value       = aws_db_instance.platform.max_allocated_storage
+  description = "RDS autoscaling ceiling used to size an isolated backup restore check."
+}
+
 output "postgres_database" {
   value       = var.database_name
   description = "RDS database name."

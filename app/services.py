@@ -253,7 +253,7 @@ def decide_approval(
     side_effect = "local approval record only"
     if decision.decision == "approve":
         source = approval.decision_json.get("source")
-        if source in {"github", "gmail"}:
+        if source in {"github", "gmail", "rest_connector"}:
             approval.reviewed_by = principal.subject
             approval.decision_comment = decision.comment
             approval.decided_at = datetime.now(UTC)

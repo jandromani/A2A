@@ -29,6 +29,73 @@ CAPABILITIES = [
         "tags": ["incident", "approval", "jira"],
     },
     {
+        "id": "agent.chief.architecture",
+        "kind": "agent",
+        "name": "Chief Architect",
+        "description": (
+            "Reviews task evidence, source links, boundaries, and capability reuse; advisory only."
+        ),
+        "tags": ["advisor", "architecture", "evidence"],
+    },
+    {
+        "id": "agent.chief.engineering",
+        "kind": "agent",
+        "name": "Chief Engineer",
+        "description": (
+            "Reviews execution state, workflow checkpoints, and operational completion; "
+            "advisory only."
+        ),
+        "tags": ["advisor", "engineering", "operations"],
+    },
+    {
+        "id": "agent.chief.quality",
+        "kind": "agent",
+        "name": "Chief Quality Officer",
+        "description": (
+            "Reviews deterministic evaluation results and acceptance checks; advisory only."
+        ),
+        "tags": ["advisor", "quality", "evaluation"],
+    },
+    {
+        "id": "agent.chief.governance",
+        "kind": "agent",
+        "name": "Chief Governance Officer",
+        "description": (
+            "Reviews audit integrity, access governance, and pending approvals; advisory only."
+        ),
+        "tags": ["advisor", "governance", "audit"],
+    },
+    {
+        "id": "skill.knowledge.evidence",
+        "kind": "skill",
+        "name": "Evidence-grounded knowledge",
+        "description": (
+            "Answer only from authorized sources, cite each material claim, and state "
+            "when evidence is missing."
+        ),
+        "tags": ["knowledge", "retrieval", "evidence"],
+    },
+    {
+        "id": "skill.report.provenance",
+        "kind": "skill",
+        "name": "Technical inventory with provenance",
+        "description": (
+            "Extract declared configuration facts, preserve file and path references, "
+            "and separate facts from interpretation."
+        ),
+        "tags": ["repository", "inventory", "provenance"],
+    },
+    {
+        "id": "skill.governed.write",
+        "kind": "skill",
+        "name": "Human-approved external writes",
+        "description": (
+            "Prepare an external write as a draft, wait for an authorized human decision, "
+            "then record the result."
+        ),
+        "tags": ["approval", "governance", "external-write"],
+    },
+    {
         "id": "tool.knowledge.search",
         "kind": "tool",
         "name": "Knowledge search",
@@ -120,8 +187,9 @@ DOCUMENTS = [
 
 def seed_database(session: Session, config: Settings | None = None) -> None:
     config = config or settings
-    if session.query(Capability).count() == 0:
-        for item in CAPABILITIES:
+    existing_capabilities = {row[0] for row in session.query(Capability.id).all()}
+    for item in CAPABILITIES:
+        if item["id"] not in existing_capabilities:
             session.add(Capability(**item))
     if session.query(KnowledgeDocument).count() == 0:
         for item in DOCUMENTS:

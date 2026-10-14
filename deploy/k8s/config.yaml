@@ -15,7 +15,7 @@ data:
   VAULT_ADDR: "@@VAULT_ADDR@@"
   VAULT_KUBERNETES_ROLE: a2a-runtime
   VAULT_KUBERNETES_MOUNT: kubernetes
-  VAULT_KV_MOUNT: secret
+  VAULT_KV_MOUNT: "@@VAULT_KV_MOUNT@@"
   VAULT_CACHE_TTL_SECONDS: "60"
   OPA_URL: http://opa.a2a.svc.cluster.local:8181
   CONNECTOR_ALLOWED_HOSTS: "@@CONNECTOR_ALLOWED_HOSTS@@"
@@ -28,11 +28,10 @@ data:
   MODEL_PROVIDER: openai-compatible
   MODEL_BASE_URL: "@@MODEL_BASE_URL@@"
   MODEL_NAME: "@@MODEL_NAME@@"
-  MODEL_API_KEY: vault://a2a/production/providers/model#api_key
+  MODEL_API_KEY: agentgateway
   MODEL_MAX_TOKENS: "1200"
   MODEL_INPUT_COST_PER_MILLION: "0.40"
   MODEL_OUTPUT_COST_PER_MILLION: "1.60"
-  OPENAI_API_KEY: vault://a2a/production/providers/model#api_key
   LANGFUSE_HOST: "@@LANGFUSE_HOST@@"
   LANGFUSE_PUBLIC_KEY: vault://a2a/production/observability/langfuse#public_key
   LANGFUSE_SECRET_KEY: vault://a2a/production/observability/langfuse#secret_key

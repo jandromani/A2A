@@ -620,7 +620,10 @@ async function loadConnectors() {
         (item.enabled && item.kind === "mcp" ? '<button class="button button-light button-small" data-connector-tools="' +
           escapeHtml(item.id) + '">Ver herramientas</button>' : "") +
         (item.enabled ? '<button class="button button-dark button-small" data-connector-invoke="' +
-          escapeHtml(item.id) + '" data-connector-kind="' + escapeHtml(item.kind) + '">Invocar</button>' : "") +
+          escapeHtml(item.id) + '" data-connector-kind="' + escapeHtml(item.kind) + '">' +
+          (item.kind === "rest" ? "Consultar GET" : "Invocar") + '</button>' : "") +
+        (item.enabled && item.kind === "rest" ? '<button class="button button-light button-small" data-connector-write="' +
+          escapeHtml(item.id) + '">Solicitar escritura</button>' : "") +
         (canManage ? '<button class="button button-light button-small" data-connector-toggle="' +
           escapeHtml(item.id) + '" data-connector-enable="' + (!item.enabled) + '">' +
           (item.enabled ? "Desactivar" : "Activar") + '</button>' : "") + '</div></article>';
@@ -658,6 +661,10 @@ async function registerConnector(event) {
         endpoint: document.getElementById("connector-endpoint").value.trim(),
         description: document.getElementById("connector-description").value.trim(),
         auth_env: authEnv || null,
+        auth_header_name: document.getElementById("connector-kind").value === "rest"
+          ? document.getElementById("connector-auth-header").value.trim() : "Authorization",
+        auth_prefix: document.getElementById("connector-kind").value === "rest"
+          ? document.getElementById("connector-auth-prefix").value : "Bearer ",
         protocol_version: document.getElementById("connector-kind").value === "mcp"
           ? document.getElementById("connector-version").value : "1.0"
       })
@@ -918,7 +925,7 @@ async function invokeConnector(id, kind) {
       const message = window.prompt("Mensaje para el agente remoto:");
       if (!message) return;
       body = { message: message, scenario: "knowledge" };
-    } else {
+    } else if (kind === "mcp") {
       const toolName = window.prompt("Nombre de la herramienta MCP:");
       if (!toolName) return;
       const rawArguments = window.prompt("Argumentos JSON ({} si no necesita argumentos):", "{}");
@@ -930,12 +937,56 @@ async function invokeConnector(id, kind) {
         throw new Error("Los argumentos deben ser un objeto JSON.");
       }
       body = { tool_name: toolName, arguments: argumentsValue };
+    } else {
+      const path = window.prompt("Ruta relativa a la URL base (vacía para la raíz):", "");
+      if (path === null) return;
+      const rawQuery = window.prompt("Parámetros de consulta JSON ({} si no necesita):", "{}");
+      if (rawQuery === null) return;
+      let query;
+      try { query = JSON.parse(rawQuery); }
+      catch (_) { throw new Error("Los parámetros deben ser JSON válido."); }
+      if (!query || Array.isArray(query) || typeof query !== "object") {
+        throw new Error("Los parámetros deben ser un objeto JSON.");
+      }
+      body = { path: path, query: query };
     }
     const result = await api("/api/v1/connectors/" + encodeURIComponent(id) + "/invoke", {
       method: "POST", body: JSON.stringify(body)
     });
     openConnectorResult("Respuesta del conector", result);
     await loadConnectors();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function requestRestWrite(id) {
+  const method = window.prompt("Método de escritura: POST, PUT, PATCH o DELETE", "POST");
+  if (method === null) return;
+  const normalizedMethod = method.trim().toUpperCase();
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(normalizedMethod)) {
+    showToast("El método debe ser POST, PUT, PATCH o DELETE.");
+    return;
+  }
+  const path = window.prompt("Ruta relativa a la URL base:", "");
+  if (path === null) return;
+  const rawBody = window.prompt("Cuerpo JSON de la acción:", "{}");
+  if (rawBody === null) return;
+  let body;
+  try { body = JSON.parse(rawBody); }
+  catch (_) { showToast("El cuerpo debe ser JSON válido."); return; }
+  if (!body || Array.isArray(body) || typeof body !== "object") {
+    showToast("El cuerpo debe ser un objeto JSON.");
+    return;
+  }
+  try {
+    const result = await api("/api/v1/connectors/" + encodeURIComponent(id) + "/actions", {
+      method: "POST",
+      body: JSON.stringify({ method: normalizedMethod, path: path, body: body })
+    });
+    openConnectorResult("Escritura pendiente de aprobación", result);
+    showToast("La acción quedó en la bandeja de aprobaciones; todavía no se envió a la API.");
+    await Promise.all([loadApprovals(), loadTasks()]);
   } catch (error) {
     showToast(error.message);
   }
@@ -1118,6 +1169,8 @@ document.addEventListener("click", function (event) {
   if (connectorTools) showConnectorTools(connectorTools.dataset.connectorTools);
   const connectorInvoke = event.target.closest("[data-connector-invoke]");
   if (connectorInvoke) invokeConnector(connectorInvoke.dataset.connectorInvoke, connectorInvoke.dataset.connectorKind);
+  const connectorWrite = event.target.closest("[data-connector-write]");
+  if (connectorWrite) requestRestWrite(connectorWrite.dataset.connectorWrite);
   const connectorToggle = event.target.closest("[data-connector-toggle]");
   if (connectorToggle) toggleConnector(connectorToggle.dataset.connectorToggle, connectorToggle.dataset.connectorEnable === "true");
   const architectureCategory = event.target.closest("[data-architecture-category]");
@@ -1214,9 +1267,12 @@ document.getElementById("architecture-zoom-reset").addEventListener("click", fun
   renderArchitectureMap();
 });
 document.getElementById("connector-kind").addEventListener("change", function (event) {
-  const visible = event.currentTarget.value === "mcp";
+  const kind = event.currentTarget.value;
   document.querySelectorAll(".mcp-version-label,.mcp-version-control").forEach(function (item) {
-    item.classList.toggle("hidden", !visible);
+    item.classList.toggle("hidden", kind !== "mcp");
+  });
+  document.querySelectorAll(".rest-auth-label,.rest-auth-control,.rest-auth-prefix-label,.rest-auth-prefix-control").forEach(function (item) {
+    item.classList.toggle("hidden", kind !== "rest");
   });
 });
 document.getElementById("token-button").addEventListener("click", function () {

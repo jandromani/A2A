@@ -105,7 +105,7 @@ def _check_services() -> list[tuple[str, bool]]:
                 version = connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar()
-                if version != "0003_governance_ledger":
+                if version != "0004_rest_connector_auth":
                     raise ValueError
         finally:
             engine.dispose()
@@ -152,6 +152,27 @@ def _check_services() -> list[tuple[str, bool]]:
         if not resolve_config_secret(config, "langfuse_secret_key"):
             raise ValueError
         if not resolve_config_secret(config, "model_api_key"):
+            raise ValueError
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SpanExportResult
+
+        from app.model_gateway import ModelGateway
+        from app.observability import build_langfuse_exporter
+
+        exporter = build_langfuse_exporter(config)
+        if exporter is None:
+            raise ValueError
+        provider = TracerProvider(resource=Resource.create({"service.name": "a2a-preflight"}))
+        span = provider.get_tracer("a2a.production.preflight").start_span("langfuse.export.check")
+        span.end()
+        export_result = exporter.export([span])
+        exporter.shutdown()
+        if export_result is not SpanExportResult.SUCCESS:
+            raise ValueError
+
+        model = ModelGateway(config).generate("Reply with exactly one word: ready.", "ready")
+        if not model.succeeded or not model.text:
             raise ValueError
 
     check("Langfuse and model provider credentials", langfuse_configuration)

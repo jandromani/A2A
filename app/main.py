@@ -10,12 +10,14 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.advisors import list_advisors, review_task
 from app.audit import replay_task_timeline, verify_audit_chain
 from app.config import Settings, settings
 from app.connectors import (
     invoke_connector,
     list_connectors,
     register_connector,
+    request_rest_action,
     set_connector_enabled,
 )
 from app.connectors import mcp_tools as remote_mcp_tools
@@ -34,6 +36,7 @@ from app.data_sources import (
 )
 from app.database import get_db, initialize_database, make_engine, make_session_factory
 from app.event_worker import run_event_worker
+from app.hubs import list_hubs
 from app.identity import (
     list_agent_identities,
     register_agent_identity,
@@ -68,6 +71,7 @@ from app.protocols import (
     handle_a2a,
     handle_mcp,
 )
+from app.schema_version import EXPECTED_SCHEMA_VERSION
 from app.schemas import (
     AgentIdentityCreate,
     ApprovalDecision,
@@ -80,6 +84,7 @@ from app.schemas import (
     GmailMessageCreate,
     KnowledgeCreate,
     Principal,
+    RestActionCreate,
     TaskCreate,
     WorkflowDefinitionCreate,
     WorkflowRunRequest,
@@ -108,7 +113,6 @@ from app.services import (
 from app.usage import aggregate_usage_ledger, list_usage_calls
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_SCHEMA_VERSION = "0003_governance_ledger"
 
 
 def _require_authorized(config: Settings, principal: Principal, action: str) -> None:
@@ -373,6 +377,33 @@ def create_app(config: Settings | None = None, database_url: str | None = None) 
     def catalog(db: Session = Depends(get_db), principal: Principal = Depends(get_principal)):
         return {"capabilities": list_capabilities(db)}
 
+    @app.get("/api/v1/hubs")
+    def hubs(
+        request: Request,
+        db: Session = Depends(get_db),
+        principal: Principal = Depends(get_principal),
+    ):
+        _require_authorized(request.app.state.settings, principal, "connector.read")
+        return {"hubs": list_hubs(db, request.app.state.settings)}
+
+    @app.get("/api/v1/advisors")
+    def advisors(
+        request: Request,
+        principal: Principal = Depends(get_principal),
+    ):
+        _require_authorized(request.app.state.settings, principal, "advisor.review")
+        return {"items": list_advisors()}
+
+    @app.post("/api/v1/tasks/{task_id}/advisors/{advisor_id}/reviews")
+    def advisor_review(
+        task_id: str,
+        advisor_id: str,
+        request: Request,
+        db: Session = Depends(get_db),
+        principal: Principal = Depends(get_principal),
+    ):
+        return review_task(db, request.app.state.settings, task_id, advisor_id, principal)
+
     @app.post("/api/v1/catalog", status_code=201)
     def create_capability(
         body: CapabilityCreate,
@@ -446,6 +477,16 @@ def create_app(config: Settings | None = None, database_url: str | None = None) 
         principal: Principal = Depends(get_principal),
     ):
         return invoke_connector(db, request.app.state.settings, connector_id, body, principal)
+
+    @app.post("/api/v1/connectors/{connector_id}/actions", status_code=202)
+    def request_rest_write(
+        connector_id: str,
+        body: RestActionCreate,
+        request: Request,
+        db: Session = Depends(get_db),
+        principal: Principal = Depends(get_principal),
+    ):
+        return request_rest_action(db, request.app.state.settings, connector_id, body, principal)
 
     @app.get("/api/v1/agents")
     def agents(db: Session = Depends(get_db), principal: Principal = Depends(get_principal)):
@@ -913,7 +954,10 @@ def create_app(config: Settings | None = None, database_url: str | None = None) 
         return JSONResponse(body, status_code=http_status)
 
     @app.get("/metrics", include_in_schema=False)
-    def metrics(db: Session = Depends(get_db)):
+    def metrics(
+        db: Session = Depends(get_db),
+        _principal: Principal = Depends(get_principal),
+    ):
         task_counts = db.execute(
             select(TaskRecord.status, func.count(TaskRecord.id)).group_by(TaskRecord.status)
         ).all()

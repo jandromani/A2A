@@ -58,6 +58,8 @@ def configure() -> None:
     )
     migration_policy = (
         f'path "{mount}/data/a2a/production/database-admin" {{\n  capabilities = ["read"]\n}}\n'
+        f'path "{mount}/data/a2a/production/database" {{\n'
+        '  capabilities = ["create", "read", "update"]\n}\n'
     )
     if not mount or not kubernetes_mount or not cluster_url.startswith("https://"):
         raise ValueError("Vault mount names and the Kubernetes API HTTPS URL are required.")

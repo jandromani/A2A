@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: a2a-migrate
+  name: a2a-migrate-@@RELEASE_SUFFIX@@
   namespace: a2a
 spec:
   backoffLimit: 3
@@ -169,6 +169,116 @@ spec:
             - name: data-lake
               persistentVolumeClaim:
                 claimName: a2a-data-lake
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: a2a-postgres-restore-verification
+  namespace: a2a
+spec:
+  schedule: "40 4 * * 0"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app: a2a-postgres-restore-verification
+        spec:
+          restartPolicy: Never
+          serviceAccountName: a2a-postgres-backup
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: temporary-postgres
+              restartPolicy: Always
+              image: pgvector/pgvector:pg17
+              imagePullPolicy: IfNotPresent
+              args: [postgres, -c, listen_addresses=localhost]
+              env:
+                - name: POSTGRES_DB
+                  value: a2a_restore
+                - name: POSTGRES_USER
+                  value: restore
+                - name: POSTGRES_HOST_AUTH_METHOD
+                  value: trust
+              startupProbe:
+                exec:
+                  command: [pg_isready, -h, 127.0.0.1, -U, restore, -d, a2a_restore]
+                periodSeconds: 2
+                failureThreshold: 90
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "2"
+                  memory: 4Gi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 999
+                runAsGroup: 999
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: temporary-database
+                  mountPath: /var/lib/postgresql/data
+          containers:
+            - name: verify-restore
+              image: "@@BACKUP_IMAGE@@"
+              imagePullPolicy: IfNotPresent
+              command: [python, /app/restore.py]
+              envFrom:
+                - configMapRef:
+                    name: a2a-backup-config
+              env:
+                - name: RESTORE_DATABASE
+                  value: a2a_restore
+                - name: RESTORE_DATABASE_HOST
+                  value: 127.0.0.1
+                - name: RESTORE_DATABASE_USER
+                  value: restore
+                - name: RESTORE_TIMEOUT_SECONDS
+                  value: "7200"
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "2"
+                  memory: 4Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: temporary-database
+              ephemeral:
+                volumeClaimTemplate:
+                  spec:
+                    accessModes: [ReadWriteOnce]
+                    storageClassName: a2a-recovery-gp3
+                    resources:
+                      requests:
+                        storage: "@@RESTORE_STORAGE_GIB@@"
+            - name: tmp
+              emptyDir: {}
 ---
 apiVersion: batch/v1
 kind: CronJob

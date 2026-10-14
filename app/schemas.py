@@ -45,7 +45,7 @@ class CapabilityCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=3, max_length=120, pattern=r"^[a-zA-Z0-9._:-]+$")
-    kind: Literal["agent", "workflow", "tool", "mcp", "api"]
+    kind: Literal["agent", "workflow", "tool", "skill", "mcp", "api"]
     name: str = Field(min_length=2, max_length=180)
     description: str = Field(min_length=5, max_length=4_000)
     version: str = Field(default="1.0.0", max_length=40)
@@ -70,11 +70,13 @@ class CapabilityCreate(BaseModel):
 class ConnectorCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["a2a", "mcp"]
+    kind: Literal["a2a", "mcp", "rest"]
     name: str = Field(min_length=2, max_length=180)
     description: str = Field(default="", max_length=4_000)
     endpoint: str = Field(min_length=8, max_length=1_000)
     auth_env: str | None = Field(default=None, max_length=120, pattern=r"^[A-Z][A-Z0-9_]*$")
+    auth_header_name: str = Field(default="Authorization", max_length=80)
+    auth_prefix: str = Field(default="Bearer ", max_length=80)
     protocol_version: Literal[
         "2026-07-28",
         "2025-11-25",
@@ -94,6 +96,25 @@ class ConnectorCreate(BaseModel):
             raise ValueError("Endpoint URLs may not contain credentials or fragments.")
         return value.rstrip("/")
 
+    @field_validator("auth_header_name")
+    @classmethod
+    def validate_auth_header_name(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,80}", value) or value.lower() in {
+            "host",
+            "content-length",
+            "transfer-encoding",
+            "connection",
+        }:
+            raise ValueError("auth_header_name must be a safe HTTP header name.")
+        return value
+
+    @field_validator("auth_prefix")
+    @classmethod
+    def validate_auth_prefix(cls, value: str) -> str:
+        if "\r" in value or "\n" in value:
+            raise ValueError("auth_prefix may not contain line breaks.")
+        return value
+
 
 class ConnectorInvoke(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -103,6 +124,35 @@ class ConnectorInvoke(BaseModel):
     tool_name: str | None = Field(default=None, max_length=180)
     arguments: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    path: str = Field(default="", max_length=500)
+    query: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+
+class RestActionCreate(BaseModel):
+    """A write request to a registered REST connector; execution always needs approval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["POST", "PUT", "PATCH", "DELETE"]
+    path: str = Field(min_length=1, max_length=500)
+    query: dict[str, str | int | float | bool] = Field(default_factory=dict, max_length=30)
+    body: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("path")
+    @classmethod
+    def validate_relative_path(cls, value: str) -> str:
+        value = value.strip()
+        if (
+            value.startswith("//")
+            or "\\" in value
+            or "\x00" in value
+            or "?" in value
+            or "#" in value
+            or "://" in value
+            or any(part == ".." for part in value.split("/"))
+        ):
+            raise ValueError("REST action path must stay under the registered connector origin.")
+        return value.lstrip("/")
 
 
 class DataSourceCreate(BaseModel):

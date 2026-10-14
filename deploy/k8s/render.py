@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -20,15 +21,18 @@ ENV_KEYS = (
     "VAULT_ADDR",
     "CONNECTOR_ALLOWED_HOSTS",
     "MODEL_BASE_URL",
+    "MODEL_UPSTREAM_BASE_URL",
     "MODEL_NAME",
     "LANGFUSE_HOST",
     "EMBEDDING_BASE_URL",
     "EMBEDDING_MODEL",
     "JIRA_BASE_URL",
     "JIRA_EMAIL",
+    "VAULT_KV_MOUNT",
 )
 TOKEN = re.compile(r"@@([A-Z0-9_]+)@@")
 OPTIONAL_ENV_KEYS = {"EMBEDDING_BASE_URL", "EMBEDDING_MODEL", "JIRA_BASE_URL", "JIRA_EMAIL"}
+MODEL_GATEWAY_URL = "http://agentgateway.a2a.svc.cluster.local:4000/v1"
 TEMPLATE_VALUE = re.compile(
     r"(?i)(example\.(org|com|net)|change[-_ ]?me|replace[-_ ]?me|placeholder|todo)"
 )
@@ -37,8 +41,11 @@ TEMPLATE_FILES = (
     "storage.yaml",
     "opa.yaml",
     "config.yaml",
+    "bootstrap.yaml",
     "platform.yaml",
     "ops.yaml",
+    "agentgateway.yaml",
+    "agentgateway-edge.yaml",
 )
 
 
@@ -103,7 +110,9 @@ def _validate_config(values: dict[str, str]) -> tuple[str, str]:
     https_origin("OIDC_ISSUER_URL", allow_path=True)
     https_origin("VAULT_ADDR")
     https_origin("LANGFUSE_HOST", allow_path=True)
-    https_origin("MODEL_BASE_URL", allow_path=True)
+    if values["MODEL_BASE_URL"].rstrip("/") != MODEL_GATEWAY_URL:
+        raise ValueError("MODEL_BASE_URL must point to the in-cluster agentgateway service.")
+    https_origin("MODEL_UPSTREAM_BASE_URL", allow_path=True)
     if values["EMBEDDING_BASE_URL"]:
         https_origin("EMBEDDING_BASE_URL", allow_path=True)
     if bool(values["JIRA_BASE_URL"]) != bool(values["JIRA_EMAIL"]):
@@ -140,6 +149,7 @@ def render_templates(
         "efs_file_system_id",
         "public_domain",
         "public_certificate_arn",
+        "postgres_max_allocated_storage_gb",
     )
     missing = [name for name in output_fields if not outputs.get(name)]
     if missing:
@@ -161,6 +171,9 @@ def render_templates(
             raise ValueError(f"{key} must use an immutable non-latest image tag or SHA-256 digest.")
 
     replacements = {key: value for key, value in env_values.items()}
+    replacements["RELEASE_SUFFIX"] = hashlib.sha256(
+        env_values["A2A_IMAGE"].encode("utf-8")
+    ).hexdigest()[:12]
     replacements.update(
         {
             "PUBLIC_URL": public_url,
@@ -176,6 +189,9 @@ def render_templates(
             "AUDIT_ARCHIVER_ROLE_ARN": str(outputs["audit_archiver_role_arn"]),
             "AUDIT_RETENTION_DAYS": str(outputs["audit_retention_days"]),
             "EFS_FILE_SYSTEM_ID": str(outputs["efs_file_system_id"]),
+            "RESTORE_STORAGE_GIB": (
+                f"{max(1, int(outputs['postgres_max_allocated_storage_gb']) * 5 // 4)}Gi"
+            ),
         }
     )
     replacements["OPA_POLICY"] = (

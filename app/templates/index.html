@@ -162,7 +162,7 @@
 
       <section class="view" id="view-catalog">
         <div class="page-heading"><div><p class="eyebrow">CAPACIDADES REUTILIZABLES</p><h1>Catálogo</h1><p class="page-subtitle">Agentes, flujos y herramientas registrados por versión y responsabilidad.</p></div></div>
-        <div class="catalog-tabs"><button class="catalog-tab active" data-catalog-kind="all">Todo</button><button class="catalog-tab" data-catalog-kind="agent">Agentes</button><button class="catalog-tab" data-catalog-kind="workflow">Flujos</button><button class="catalog-tab" data-catalog-kind="tool">Herramientas</button></div>
+        <div class="catalog-tabs"><button class="catalog-tab active" data-catalog-kind="all">Todo</button><button class="catalog-tab" data-catalog-kind="agent">Agentes</button><button class="catalog-tab" data-catalog-kind="workflow">Flujos</button><button class="catalog-tab" data-catalog-kind="tool">Herramientas</button><button class="catalog-tab" data-catalog-kind="skill">Skills</button></div>
         <div id="catalog-list" class="catalog-grid"><div class="empty-state">Cargando catálogo…</div></div>
         <div class="section-heading section-spaced"><div><p class="eyebrow">CONTEXTO AUTORIZADO</p><h2>Fuentes de conocimiento</h2></div><span class="data-pill">Alcance aplicado en cada búsqueda</span></div>
         <div id="knowledge-list" class="knowledge-grid"><div class="empty-state">Cargando fuentes…</div></div>
@@ -199,15 +199,17 @@
         <div id="system-overview" class="system-grid"><div class="empty-state">Comprobando servicios…</div></div>
         <section class="panel protocol-panel"><div class="panel-heading"><div><p class="eyebrow">INTEROPERABILIDAD</p><h2>Interfaces expuestas</h2></div></div><div class="protocol-row"><span class="protocol-mark">A2A</span><div><strong>Agent Card y tareas con el SDK oficial</strong><small><code>/.well-known/agent-card.json</code> · <code>/a2a-sdk/</code> · compatibilidad: <code>/a2a</code></small></div><span class="control-state">Disponible</span></div><div class="protocol-row"><span class="protocol-mark mcp">MCP</span><div><strong>Streamable HTTP con el SDK oficial</strong><small><code>/mcp-sdk/</code> · tools/list · tools/call · resources/read · compatibilidad: <code>/mcp</code></small></div><span class="control-state">Disponible</span></div></section>
         <section class="panel connector-panel"><div class="panel-heading"><div><p class="eyebrow">HUB DE INTEGRACIONES</p><h2>Conectores A2A y MCP</h2></div><button class="icon-button" id="refresh-connectors" aria-label="Actualizar conectores">↻</button></div>
-          <p class="connector-intro">Registra otros agentes A2A y servidores MCP. La dirección se guarda como configuración; las claves se leen del entorno mediante el nombre de variable.</p>
+          <p class="connector-intro">Registra agentes A2A, servidores MCP y APIs REST. Las lecturas REST se ejecutan con permisos; cada escritura queda en espera de aprobación humana. Las claves se leen de Vault o del entorno mediante el nombre de variable.</p>
           <div id="connectors-list" class="connector-list"><div class="empty-state">Cargando conectores…</div></div>
           <details class="connector-register"><summary>Registrar un conector</summary>
             <form id="connector-form" class="connector-form">
-              <label for="connector-kind">Protocolo</label><select id="connector-kind"><option value="a2a">A2A · agente remoto</option><option value="mcp">MCP · servidor de herramientas</option></select>
+              <label for="connector-kind">Protocolo</label><select id="connector-kind"><option value="a2a">A2A · agente remoto</option><option value="mcp">MCP · servidor de herramientas</option><option value="rest">REST · API externa</option></select>
               <div class="mcp-version-label"><label for="connector-version">Versión MCP preferida</label></div><div class="mcp-version-control"><select id="connector-version"><option value="2026-07-28">2026-07-28 · actual</option><option value="2025-11-25">2025-11-25 · compatible</option></select></div>
               <label for="connector-name">Nombre</label><input id="connector-name" required maxlength="180" placeholder="Agente de soporte">
               <label for="connector-endpoint">URL del endpoint</label><input id="connector-endpoint" required type="url" placeholder="https://agente.example.com/a2a">
               <label for="connector-auth-env">Variable de entorno del bearer token</label><input id="connector-auth-env" maxlength="120" placeholder="SUPPORT_AGENT_TOKEN">
+              <div class="rest-auth-label hidden"><label for="connector-auth-header">Cabecera de autenticación REST</label></div><div class="rest-auth-control hidden"><input id="connector-auth-header" maxlength="80" value="Authorization" placeholder="Authorization o X-API-Key"></div>
+              <div class="rest-auth-prefix-label hidden"><label for="connector-auth-prefix">Prefijo de autenticación REST</label></div><div class="rest-auth-prefix-control hidden"><input id="connector-auth-prefix" maxlength="80" value="Bearer " placeholder="Bearer (vacío para clave directa)"></div>
               <label for="connector-description">Descripción</label><input id="connector-description" maxlength="4000" placeholder="Qué capacidad ofrece y qué datos necesita">
               <div class="form-foot"><span>El valor del token nunca se guarda en la base de datos.</span><button class="button button-dark button-small" type="submit">Registrar</button></div>
               <div id="connector-error" class="form-error hidden"></div>

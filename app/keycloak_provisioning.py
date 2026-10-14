@@ -6,6 +6,9 @@ import argparse
 import json
 import os
 import re
+import secrets
+import time
+from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -27,6 +30,7 @@ REALM_ROLES = {
     "approver": "Review gated external actions",
     "admin": "Manage the platform and agent identities",
     "agent": "Marks a service-account token for registry validation",
+    "identity-manager": "Registers and activates governed agent identities",
 }
 
 
@@ -79,6 +83,49 @@ class KeycloakProvisioner:
         if response.status_code >= 400 and response.status_code not in (allow_status or set()):
             response.raise_for_status()
         return response
+
+    def ensure_realm(self) -> None:
+        """Import the checked-in realm once; preserve existing realm data on reruns."""
+        definition = Path(__file__).resolve().parents[1] / "deploy" / "keycloak" / "realm-a2a.json"
+        payload = json.loads(definition.read_text(encoding="utf-8"))
+        response = self.client.get(
+            f"{self.base_url}/admin/realms/{quote(self.realm, safe='')}",
+            headers={"Authorization": f"Bearer {self.token}"},
+        )
+        if response.status_code == 200:
+            for client_definition in payload.get("clients", []):
+                if client_definition.get("clientId") in {"a2a-api", "a2a-console"}:
+                    self.ensure_realm_client(client_definition)
+            return
+        if response.status_code != 404:
+            response.raise_for_status()
+        created = self.client.post(
+            f"{self.base_url}/admin/realms",
+            headers={"Authorization": f"Bearer {self.token}"},
+            json=payload,
+        )
+        if created.status_code not in {201, 204}:
+            created.raise_for_status()
+            raise RuntimeError("Keycloak did not import the A2A realm.")
+
+    def ensure_realm_client(self, definition: dict) -> None:
+        client_id = str(definition["clientId"])
+        clients = self.request("GET", "clients", params={"clientId": client_id}).json()
+        if not clients:
+            response = self.request("POST", "clients", json=definition)
+            if response.status_code not in {201, 204}:
+                raise RuntimeError(f"Keycloak did not create required client {client_id}.")
+            clients = self.request("GET", "clients", params={"clientId": client_id}).json()
+            if not clients:
+                raise RuntimeError(f"Keycloak created but could not read client {client_id}.")
+        current = clients[0]
+        if not current.get("enabled"):
+            raise RuntimeError(f"Required Keycloak client {client_id} is disabled.")
+        if bool(current.get("publicClient")) != bool(definition.get("publicClient")):
+            raise RuntimeError(f"Required Keycloak client {client_id} has the wrong client type.")
+        client_uuid = str(current["id"])
+        if client_id == "a2a-console":
+            self.ensure_audience_mapper(client_uuid)
 
     def ensure_agent(self, client_id: str) -> tuple[str, str]:
         self.ensure_role("agent")
@@ -186,13 +233,13 @@ class KeycloakProvisioner:
                     f"Keycloak did not add the API audience mapper to {client_uuid}."
                 )
 
-    def ensure_service_role(self, client_uuid: str) -> None:
+    def ensure_service_role(self, client_uuid: str, role_name: str = "agent") -> None:
         user = self.request("GET", f"clients/{client_uuid}/service-account-user").json()
-        role = self.ensure_role("agent")
+        role = self.ensure_role(role_name)
         mappings = self.request(
             "GET", f"users/{quote(user['id'], safe='')}/role-mappings/realm"
         ).json()
-        if not any(item.get("name") == "agent" for item in mappings):
+        if not any(item.get("name") == role_name for item in mappings):
             response = self.request(
                 "POST",
                 f"users/{quote(user['id'], safe='')}/role-mappings/realm",
@@ -200,8 +247,68 @@ class KeycloakProvisioner:
             )
             if response.status_code not in {201, 204}:
                 raise RuntimeError(
-                    "Keycloak did not grant the agent realm role to the service account."
+                    f"Keycloak did not grant the {role_name} realm role to the service account."
                 )
+
+    def ensure_provisioner(self, client_id: str = "a2a-provisioner") -> str:
+        self.ensure_role("identity-manager")
+        clients = self.request("GET", "clients", params={"clientId": client_id}).json()
+        if clients:
+            current = clients[0]
+            client_uuid = current["id"]
+            if current.get("publicClient") or not current.get("serviceAccountsEnabled"):
+                raise RuntimeError(
+                    f"Existing Keycloak client {client_id} is not a confidential service account."
+                )
+            if not current.get("enabled"):
+                raise RuntimeError(
+                    f"Existing Keycloak client {client_id} is disabled; refusing to reactivate it."
+                )
+        else:
+            response = self.request(
+                "POST",
+                "clients",
+                json={
+                    "clientId": client_id,
+                    "name": "A2A identity provisioner",
+                    "enabled": True,
+                    "protocol": "openid-connect",
+                    "publicClient": False,
+                    "standardFlowEnabled": False,
+                    "implicitFlowEnabled": False,
+                    "directAccessGrantsEnabled": False,
+                    "serviceAccountsEnabled": True,
+                    "clientAuthenticatorType": "client-secret",
+                    "protocolMappers": [AUDIENCE_MAPPER],
+                },
+            )
+            if response.status_code not in {201, 204}:
+                raise RuntimeError(f"Keycloak did not create client {client_id}.")
+            clients = self.request("GET", "clients", params={"clientId": client_id}).json()
+            if not clients:
+                raise RuntimeError(f"Keycloak created but could not read client {client_id}.")
+            client_uuid = clients[0]["id"]
+        self.ensure_audience_mapper(client_uuid)
+        self.ensure_service_role(client_uuid, "identity-manager")
+        secret = self.request("GET", f"clients/{client_uuid}/client-secret").json().get("value")
+        if not isinstance(secret, str) or len(secret) < 16:
+            raise RuntimeError(f"Keycloak returned no client secret for {client_id}.")
+        return secret
+
+    def issue_realm_token(self, client_id: str, client_secret: str) -> str:
+        response = self.client.post(
+            f"{self.base_url}/realms/{quote(self.realm, safe='')}/protocol/openid-connect/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+        )
+        response.raise_for_status()
+        token = response.json().get("access_token")
+        if not isinstance(token, str) or not token:
+            raise RuntimeError("Keycloak did not issue an identity provisioner token.")
+        return token
 
 
 def store_secret_in_vault(client_id: str, secret: str) -> str:
@@ -269,6 +376,47 @@ def register_in_platform(api_url: str, token: str, client_id: str, display_name:
     return status
 
 
+def smoke_knowledge_task(
+    keycloak: KeycloakProvisioner,
+    api_url: str,
+    client_id: str,
+    client_secret: str,
+) -> str:
+    """Verify real OIDC agent auth, queue consumption and the knowledge/model path."""
+    token = keycloak.issue_realm_token(client_id, client_secret)
+    headers = {"Authorization": f"Bearer {token}"}
+    task_response = keycloak.client.post(
+        f"{api_url.rstrip('/')}/api/v1/tasks",
+        headers=headers,
+        json={
+            "scenario": "knowledge",
+            "message": "Indica el plazo para justificar un gasto de viaje y cita la fuente.",
+            "context_id": f"production-smoke-{secrets.token_hex(6)}",
+        },
+        timeout=30,
+    )
+    if task_response.status_code != 201:
+        raise RuntimeError("Live OIDC knowledge-task smoke test could not create a task.")
+    task_id = str(task_response.json().get("id") or "")
+    if not task_id:
+        raise RuntimeError("Live OIDC knowledge-task smoke test received no task ID.")
+    for _ in range(90):
+        response = keycloak.client.get(
+            f"{api_url.rstrip('/')}/api/v1/tasks/{quote(task_id, safe='')}",
+            headers=headers,
+            timeout=15,
+        )
+        if response.status_code != 200:
+            raise RuntimeError("Live OIDC knowledge-task smoke test could not read its task.")
+        task = response.json()
+        if task.get("status") in {"completed", "needs_review"} and task.get("result"):
+            return task_id
+        if task.get("status") in {"failed", "cancelled"}:
+            raise RuntimeError("Live OIDC knowledge-task smoke test did not complete.")
+        time.sleep(2)
+    raise RuntimeError("Live OIDC knowledge-task smoke test timed out.")
+
+
 def provision(agent_client_ids: list[str]) -> list[dict[str, str]]:
     for client_id in agent_client_ids:
         if not re.fullmatch(r"[A-Za-z0-9._:-]{3,200}", client_id):
@@ -285,20 +433,25 @@ def provision(agent_client_ids: list[str]) -> list[dict[str, str]]:
         raise ValueError("A2A_API_URL must use HTTPS outside localhost.")
     if not parsed_api_url.netloc or parsed_api_url.query or parsed_api_url.fragment:
         raise ValueError("A2A_API_URL must be a valid origin or base URL without a query.")
-    api_token = os.environ["A2A_ADMIN_BEARER_TOKEN"]
     results = []
     with httpx.Client(timeout=15) as client:
         keycloak = KeycloakProvisioner(base_url=base_url, realm=realm, client=client)
         keycloak.authenticate()
+        keycloak.ensure_realm()
         for role in REALM_ROLES:
             keycloak.ensure_role(role)
         keycloak.configure_console(os.getenv("A2A_PUBLIC_URL", os.getenv("PUBLIC_URL", "")))
         for username in filter(None, (os.getenv("KEYCLOAK_ADMIN_USERNAMES", "").split(","))):
             keycloak.grant_admin_role(username.strip())
+        provisioner_secret = keycloak.ensure_provisioner()
+        api_token = keycloak.issue_realm_token("a2a-provisioner", provisioner_secret)
+        smoke_credentials: tuple[str, str] | None = None
         for client_id in agent_client_ids:
             _, secret = keycloak.ensure_agent(client_id)
             vault_reference = store_secret_in_vault(client_id, secret)
             status = register_in_platform(api_url, api_token, client_id, client_id)
+            if smoke_credentials is None:
+                smoke_credentials = (client_id, secret)
             results.append(
                 {
                     "client_id": client_id,
@@ -306,6 +459,9 @@ def provision(agent_client_ids: list[str]) -> list[dict[str, str]]:
                     "registry_status": status,
                 }
             )
+        assert smoke_credentials is not None
+        smoke_task = smoke_knowledge_task(keycloak, api_url, *smoke_credentials)
+        results.append({"smoke_test": "knowledge-task", "task_id": smoke_task})
     return results
 
 

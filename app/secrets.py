@@ -95,6 +95,29 @@ def resolve_named_secret(config: Settings, name: str | None) -> str | None:
     return resolve_secret(config, os.getenv(name))
 
 
+def write_vault_secret(config: Settings, path: str, values: dict[str, str]) -> None:
+    """Write one KV v2 value using the caller's short-lived Vault workload token."""
+    if not config.vault_addr:
+        raise RuntimeError("VAULT_ADDR is required to write a runtime secret.")
+    if not path or path.startswith("/") or any(part in {"", ".", ".."} for part in path.split("/")):
+        raise ValueError("Vault secret path must be a valid relative path.")
+    mount = config.vault_kv_mount.strip("/")
+    if not mount or any(part in {"", ".", ".."} for part in mount.split("/")):
+        raise ValueError("Vault KV mount must be a valid relative path.")
+    headers = {"X-Vault-Token": _vault_token(config), "Content-Type": "application/json"}
+    if config.vault_namespace:
+        headers["X-Vault-Namespace"] = config.vault_namespace
+    encoded_path = "/".join(quote(part, safe="") for part in path.split("/"))
+    response = httpx.post(
+        f"{config.vault_addr.rstrip('/')}/v1/{quote(mount, safe='')}/data/{encoded_path}",
+        headers=headers,
+        json={"data": values},
+        timeout=10.0,
+    )
+    if response.status_code not in {200, 204}:
+        raise RuntimeError("Vault rejected the runtime secret write.")
+
+
 def _vault_token(config: Settings) -> str:
     if config.vault_token:
         return config.vault_token.get_secret_value()

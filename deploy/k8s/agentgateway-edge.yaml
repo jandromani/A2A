@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: a2a-agentgateway-edge
+  namespace: a2a
+data:
+  config.yaml: |
+    # yaml-language-server: $schema=https://agentgateway.dev/schema/config
+    binds:
+      - port: 4003
+        listeners:
+          - routes:
+              - name: a2a-sdk
+                matches:
+                  - path:
+                      pathPrefix: /a2a-sdk/
+                policies:
+                  a2a: {}
+                backends:
+                  - host: a2a-api.a2a.svc.cluster.local
+              - name: mcp-sdk
+                matches:
+                  - path:
+                      pathPrefix: /mcp-sdk/
+                backends:
+                  - mcp:
+                      targets:
+                        - name: a2a-platform
+                          mcp:
+                            host: http://a2a-api.a2a.svc.cluster.local/mcp-sdk/
+              - name: platform-http
+                backends:
+                  - host: a2a-api.a2a.svc.cluster.local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentgateway-edge
+  namespace: a2a
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: agentgateway-edge
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: agentgateway-edge
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: agentgateway-edge
+      containers:
+        - name: agentgateway
+          image: cr.agentgateway.dev/agentgateway:v1.6.0
+          imagePullPolicy: IfNotPresent
+          args: ["-f", "/etc/agentgateway/config.yaml"]
+          ports:
+            - name: http
+              containerPort: 4003
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/agentgateway
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: a2a-agentgateway-edge
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentgateway-edge
+  namespace: a2a
+spec:
+  type: ClusterIP
+  selector:
+    app: agentgateway-edge
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agentgateway-edge
+  namespace: a2a
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: agentgateway-edge

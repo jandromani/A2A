@@ -11,7 +11,8 @@
       { "name": "operator", "description": "Operate workflows, sources and audit" },
       { "name": "approver", "description": "Review gated external actions" },
       { "name": "admin", "description": "Manage platform and agent identities" },
-      { "name": "agent", "description": "Marks a service-account token for registry validation" }
+      { "name": "agent", "description": "Marks a service-account token for registry validation" },
+      { "name": "identity-manager", "description": "Registers and activates governed agent identities" }
     ]
   },
   "clients": [

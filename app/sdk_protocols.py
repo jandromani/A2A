@@ -217,7 +217,12 @@ def build_mcp_sdk_app(config: Settings, factory):
             _mcp_principal(ctx),
         )
 
-    allowed_hosts = ["localhost:*", "127.0.0.1:*", "[::1]:*"]
+    allowed_hosts = [
+        "localhost:*",
+        "127.0.0.1:*",
+        "[::1]:*",
+        "a2a-api.a2a.svc.cluster.local:*",
+    ]
     allowed_origins = ["http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*"]
     public_host = (
         __import__("urllib.parse", fromlist=["urlparse"]).urlparse(config.public_url).hostname

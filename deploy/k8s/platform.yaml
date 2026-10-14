@@ -142,7 +142,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: a2a-api
+                name: agentgateway-edge
                 port:
                   name: http
 ---

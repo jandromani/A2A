@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.event_bus import publish_event, write_audit
-from app.models import ApprovalRecord, TaskRecord
+from app.models import ApprovalRecord, ConnectorRecord, TaskRecord
 from app.policy import authorize
 from app.schemas import GitHubCommentCreate, GmailMessageCreate, Principal
 from app.secrets import resolve_secret
@@ -445,6 +445,26 @@ def execute_approved_integration(
             raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
             _gmail_request(config, "POST", "messages/send", json_body={"raw": raw})
         effect = f"Gmail message sent to {len(decision.get('to', []))} recipient(s)."
+    elif source == "rest_connector":
+        connector_id = str(decision.get("connector_id", ""))
+        connector = session.get(ConnectorRecord, connector_id)
+        if not connector or not connector.enabled or connector.kind != "rest":
+            raise ValueError("Approved REST connector is missing, disabled, or has changed type.")
+        method = str(decision.get("method", ""))
+        if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            raise ValueError("Approved REST method is invalid.")
+        from app.connectors import _rest_request
+
+        response = _rest_request(
+            connector,
+            config,
+            method,
+            str(decision.get("path", "")),
+            query=decision.get("query") or {},
+            body=decision.get("body") or {},
+            idempotency_key=approval.id,
+        )
+        effect = f"REST {method} completed with HTTP {response['status_code']}."
     else:
         raise ValueError("Unknown approved integration action.")
 

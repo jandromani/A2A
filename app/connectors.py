@@ -1,9 +1,8 @@
 import json
-import os
 from datetime import UTC, datetime
 from ipaddress import ip_address
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse, urlsplit
 from uuid import uuid4
 
 import httpx
@@ -12,11 +11,11 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.event_bus import write_audit
+from app.event_bus import publish_event, write_audit
 from app.mcp_transport import CURRENT_PROTOCOL_VERSION
-from app.models import ConnectorRecord
+from app.models import ApprovalRecord, ConnectorRecord, TaskRecord
 from app.policy import authorize
-from app.schemas import ConnectorCreate, ConnectorInvoke, Principal
+from app.schemas import ConnectorCreate, ConnectorInvoke, Principal, RestActionCreate
 from app.sdk_clients import call_a2a_sdk, call_mcp_sdk
 from app.secrets import resolve_named_secret
 
@@ -58,6 +57,12 @@ def validate_outbound_endpoint(endpoint: str, config: Settings) -> None:
 
 
 def serialize_connector(connector: ConnectorRecord, config: Settings) -> dict[str, Any]:
+    auth_configured = False
+    if connector.auth_env:
+        try:
+            auth_configured = bool(resolve_named_secret(config, connector.auth_env))
+        except (RuntimeError, ValueError, httpx.HTTPError):
+            auth_configured = False
     return {
         "id": connector.id,
         "kind": connector.kind,
@@ -65,7 +70,8 @@ def serialize_connector(connector: ConnectorRecord, config: Settings) -> dict[st
         "description": connector.description,
         "endpoint": connector.endpoint,
         "auth_env": connector.auth_env,
-        "auth_configured": bool(connector.auth_env and os.getenv(connector.auth_env)),
+        "auth_configured": auth_configured,
+        "auth_header_name": connector.auth_header_name,
         "protocol_version": connector.protocol_version,
         "enabled": connector.enabled,
         "last_invoked_at": connector.last_invoked_at.isoformat()
@@ -73,7 +79,7 @@ def serialize_connector(connector: ConnectorRecord, config: Settings) -> dict[st
         else None,
         "created_at": connector.created_at.isoformat(),
         "registration_state": "registered and configured"
-        if not connector.auth_env or os.getenv(connector.auth_env)
+        if not connector.auth_env or auth_configured
         else "secret environment variable is missing",
     }
 
@@ -101,6 +107,8 @@ def register_connector(
         description=body.description,
         endpoint=body.endpoint,
         auth_env=body.auth_env,
+        auth_header_name=body.auth_header_name,
+        auth_prefix=body.auth_prefix,
         protocol_version=body.protocol_version,
     )
     session.add(record)
@@ -164,8 +172,152 @@ def _headers(connector: ConnectorRecord, config: Settings, accept: str) -> dict[
                 status_code=424,
                 detail=f"Connector secret {connector.auth_env} is not present in the environment.",
             )
-        result["Authorization"] = f"Bearer {token}"
+        result[connector.auth_header_name] = f"{connector.auth_prefix}{token}"
     return result
+
+
+def _rest_target(endpoint: str, path: str, config: Settings) -> str:
+    """Join an API-relative path without allowing it to escape the registered origin."""
+    if (
+        path.startswith("//")
+        or "\\" in path
+        or "\x00" in path
+        or "?" in path
+        or "#" in path
+        or "://" in path
+        or any(part == ".." for part in path.split("/"))
+    ):
+        raise HTTPException(status_code=422, detail="REST path must stay under the connector URL.")
+    base = urlsplit(endpoint.rstrip("/") + "/")
+    target = urlsplit(urljoin(endpoint.rstrip("/") + "/", path.lstrip("/")))
+    if target.scheme != base.scheme or target.netloc.casefold() != base.netloc.casefold():
+        raise HTTPException(status_code=422, detail="REST path changed the connector origin.")
+    result = target.geturl()
+    validate_outbound_endpoint(result, config)
+    return result
+
+
+def _rest_request(
+    connector: ConnectorRecord,
+    config: Settings,
+    method: str,
+    path: str,
+    *,
+    query: dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    target = _rest_target(connector.endpoint, path, config)
+    headers = _headers(connector, config, "application/json")
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    try:
+        content = bytearray()
+        with httpx.Client(timeout=20.0, follow_redirects=False) as client:
+            with client.stream(
+                method,
+                target,
+                headers=headers,
+                params=query or None,
+                json=body,
+            ) as response:
+                response.raise_for_status()
+                if int(response.headers.get("content-length", "0") or 0) > 1_000_000:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="REST connector response exceeds 1 MB.",
+                    )
+                for chunk in response.iter_bytes():
+                    content.extend(chunk)
+                    if len(content) > 1_000_000:
+                        raise HTTPException(
+                            status_code=502,
+                            detail="REST connector response exceeds 1 MB.",
+                        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"REST connector returned HTTP {exc.response.status_code}.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="REST connector request failed.") from exc
+    if not content:
+        return {"status_code": response.status_code, "data": None}
+    try:
+        payload = json.loads(content)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502, detail="REST connector must return a JSON response."
+        ) from exc
+    return {"status_code": response.status_code, "data": payload}
+
+
+def request_rest_action(
+    session: Session,
+    config: Settings,
+    connector_id: str,
+    body: RestActionCreate,
+    principal: Principal,
+) -> dict[str, Any]:
+    record = _connector(session, connector_id)
+    if record.kind != "rest":
+        raise HTTPException(status_code=409, detail="This connector is not a REST API.")
+    _rest_target(record.endpoint, body.path, config)
+    if len(json.dumps(body.body, default=str).encode("utf-8")) > 100_000:
+        raise HTTPException(status_code=413, detail="REST action body exceeds 100 KB.")
+    allowed, reason = authorize(
+        principal,
+        "integration.api.request_write",
+        {"scope": f"api:{connector_id}", "connector_id": connector_id},
+        config,
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+    task = TaskRecord(
+        scenario="integration",
+        title=f"REST {body.method} · {record.name}",
+        request_text=f"{body.method} {body.path}"[:12_000],
+        status="awaiting_approval",
+        actor=principal.subject,
+        payload_json={"integration": "rest", "connector_id": connector_id},
+        result_json={"external_write": "pending human approval"},
+    )
+    session.add(task)
+    session.flush()
+    approval = ApprovalRecord(
+        task_id=task.id,
+        status="pending",
+        requested_by=principal.subject,
+        decision_json={
+            "source": "rest_connector",
+            "connector_id": connector_id,
+            "method": body.method,
+            "path": body.path,
+            "query": body.query,
+            "body": body.body,
+            "integration_scope": f"api:{connector_id}",
+        },
+    )
+    session.add(approval)
+    session.flush()
+    publish_event(
+        session,
+        config,
+        task.id,
+        "approval.requested",
+        "A REST API write is waiting for human approval.",
+        {"approval_id": approval.id, "source": "rest_connector"},
+    )
+    write_audit(
+        session,
+        principal.subject,
+        "integration.api.write.requested",
+        "approval",
+        approval.id,
+        details={"connector_id": connector_id, "method": body.method, "path": body.path},
+    )
+    session.commit()
+    return {"approval_id": approval.id, "task_id": task.id, "status": approval.status}
 
 
 def _post(
@@ -341,7 +493,7 @@ def invoke_connector(
         response = call_a2a_sdk(record.endpoint, headers, body.message, metadata)
         output: dict[str, Any] = {"protocol": "a2a", "response": response}
         operation = "connector.a2a.message_send"
-    else:
+    elif record.kind == "mcp":
         if not body.tool_name:
             raise HTTPException(status_code=422, detail="An MCP tool name is required.")
         response = _mcp_exchange(
@@ -352,6 +504,16 @@ def invoke_connector(
         )
         output = {"protocol": "mcp", "response": response}
         operation = "connector.mcp.tools_call"
+    else:
+        response = _rest_request(
+            record,
+            config,
+            "GET",
+            body.path,
+            query=body.query,
+        )
+        output = {"protocol": "rest", **response}
+        operation = "connector.rest.get"
     record.last_invoked_at = datetime.now(UTC)
     write_audit(
         session,

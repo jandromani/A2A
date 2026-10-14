@@ -4,11 +4,13 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.config import Settings
 from app.connectors import _mcp_exchange, _rpc_response, validate_outbound_endpoint
+from app.main import create_app
 from app.mcp_transport import CURRENT_PROTOCOL_VERSION, decode_header_value, encode_header_value
 from app.models import (
     ApprovalRecord,
@@ -692,9 +694,127 @@ def test_production_connector_requires_allowlisted_https_host():
         validate_outbound_endpoint("https://other.example.com/a2a", config)
 
 
+def test_rest_connector_read_and_write_require_approval(client, monkeypatch):
+    from httpx import Client, MockTransport
+
+    outbound = []
+
+    def handler(request):
+        outbound.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"items": [{"id": "asset-1"}]})
+        return httpx.Response(204)
+
+    monkeypatch.setattr(
+        "app.connectors.httpx.Client",
+        lambda **kwargs: Client(transport=MockTransport(handler), **kwargs),
+    )
+    created = client.post(
+        "/api/v1/connectors",
+        json={
+            "kind": "rest",
+            "name": "Assets API",
+            "endpoint": "https://api.example.test/v1",
+            "auth_header_name": "X-API-Key",
+            "auth_prefix": "",
+        },
+    )
+    assert created.status_code == 201
+    connector_id = created.json()["id"]
+
+    read = client.post(
+        f"/api/v1/connectors/{connector_id}/invoke",
+        json={"path": "assets", "query": {"limit": 2}},
+    )
+    assert read.status_code == 200
+    assert read.json()["data"]["items"][0]["id"] == "asset-1"
+    assert outbound[0].url.path == "/v1/assets"
+    assert str(outbound[0].url.params) == "limit=2"
+
+    action = client.post(
+        f"/api/v1/connectors/{connector_id}/actions",
+        json={"method": "POST", "path": "assets", "body": {"name": "Laptop"}},
+    )
+    assert action.status_code == 202
+    assert action.json()["status"] == "pending"
+    assert len(outbound) == 1
+    pending = client.get("/api/v1/approvals").json()["items"]
+    assert pending[0]["id"] == action.json()["approval_id"]
+
+    decision = client.post(
+        f"/api/v1/approvals/{action.json()['approval_id']}/decision",
+        json={"decision": "approve", "comment": "Revisado."},
+    )
+    assert decision.status_code == 200
+    assert decision.json()["task"]["status"] == "completed"
+    assert len(outbound) == 2
+    assert outbound[1].method == "POST"
+    assert outbound[1].headers["idempotency-key"] == action.json()["approval_id"]
+
+
+def test_rest_connector_rejects_path_escape_before_network_call(client, monkeypatch):
+    from httpx import Client, MockTransport
+
+    monkeypatch.setattr(
+        "app.connectors.httpx.Client",
+        lambda **kwargs: Client(
+            transport=MockTransport(lambda request: httpx.Response(200, json={})), **kwargs
+        ),
+    )
+    connector = client.post(
+        "/api/v1/connectors",
+        json={"kind": "rest", "name": "Assets API", "endpoint": "https://api.example.test/v1"},
+    ).json()
+    response = client.post(
+        f"/api/v1/connectors/{connector['id']}/invoke", json={"path": "../admin"}
+    )
+    assert response.status_code == 422
+
+
+def test_hubs_and_advisors_are_exposed_without_granting_decision_authority(client):
+    hubs = client.get("/api/v1/hubs")
+    assert hubs.status_code == 200
+    assert hubs.json()["hubs"]["agents"]
+    assert hubs.json()["hubs"]["tools"]
+    assert hubs.json()["hubs"]["skills"]
+    advisors = client.get("/api/v1/advisors")
+    assert advisors.status_code == 200
+    assert {item["id"] for item in advisors.json()["items"]} == {
+        "architecture",
+        "engineering",
+        "quality",
+        "governance",
+    }
+    assert all(item["decision_authority"] == "advisory-only" for item in advisors.json()["items"])
+
+    task = client.post(
+        "/api/v1/tasks",
+        json={"scenario": "incident", "message": "Prepara respuesta para revisión humana."},
+    ).json()
+    review = client.post(f"/api/v1/tasks/{task['id']}/advisors/governance/reviews")
+    assert review.status_code == 200
+    assert review.json()["recommendation"] == "human_decision_required"
+    assert client.get("/api/v1/approvals").json()["items"]
+
+
 def test_development_authentication_cannot_be_used_in_production():
     with pytest.raises(ValidationError, match="AUTH_MODE=dev"):
         Settings(_env_file=None, environment="production", auth_mode="dev")
+
+
+def test_metrics_require_authentication_outside_development(tmp_path):
+    config = Settings(
+        _env_file=None,
+        environment="test",
+        auth_mode="api_key",
+        api_bearer_token="metrics-test-key",
+        database_url=f"sqlite:///{tmp_path / 'metrics.db'}",
+    )
+    with TestClient(create_app(config)) as client:
+        assert client.get("/metrics").status_code == 401
+        response = client.get("/metrics", headers={"Authorization": "Bearer metrics-test-key"})
+        assert response.status_code == 200
+        assert "agentic_tasks_total" in response.text
 
 
 def test_inspector_keeps_provenance_for_every_fact():

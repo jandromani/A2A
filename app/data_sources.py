@@ -2,10 +2,9 @@
 
 import csv
 import json
-import os
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from fastapi import HTTPException
@@ -21,6 +20,7 @@ from app.schemas import DataSourceCreate, DataSourceEventBatch, Principal
 from app.secrets import resolve_named_secret
 
 _OPTION_KEYS = {
+    "provider",
     "records_path",
     "title_field",
     "id_field",
@@ -31,16 +31,43 @@ _OPTION_KEYS = {
     "exclude_fields",
     "query_params",
 }
+_SOURCE_PROVIDERS = {
+    "generic": {"kind": None, "format": None, "records_path": None, "next_field": None},
+    "hubspot": {
+        "kind": "crm",
+        "format": "json",
+        "records_path": "results",
+        "next_field": "paging.next.link",
+    },
+    "salesforce": {
+        "kind": "crm",
+        "format": "json",
+        "records_path": "records",
+        "next_field": "nextRecordsUrl",
+    },
+    "sap_odata": {
+        "kind": "erp",
+        "format": "odata",
+        "records_path": "value",
+        "next_field": "@odata.nextLink",
+    },
+}
 
 
-def serialize_data_source(source: DataSourceRecord) -> dict[str, Any]:
+def serialize_data_source(source: DataSourceRecord, config: Settings) -> dict[str, Any]:
+    auth_configured = False
+    if source.auth_env:
+        try:
+            auth_configured = bool(resolve_named_secret(config, source.auth_env))
+        except (RuntimeError, ValueError, httpx.HTTPError):
+            auth_configured = False
     return {
         "id": source.id,
         "kind": source.kind,
         "name": source.name,
         "endpoint": source.endpoint,
         "auth_env": source.auth_env,
-        "auth_configured": bool(source.auth_env and os.getenv(source.auth_env)),
+        "auth_configured": auth_configured,
         "scope": source.scope,
         "format": source.format,
         "source_options": source.source_options,
@@ -64,6 +91,10 @@ def _require_allowed(
 
 def _validate_data_source(source: DataSourceCreate, config: Settings) -> None:
     if source.kind == "data_lake":
+        if source.source_options.get("provider", "generic") != "generic":
+            raise HTTPException(
+                status_code=422, detail="Data-lake sources do not use CRM adapters."
+            )
         if not source.endpoint:
             raise HTTPException(
                 status_code=422, detail="A relative data-lake file path is required."
@@ -85,6 +116,21 @@ def _validate_data_source(source: DataSourceCreate, config: Settings) -> None:
         raise HTTPException(status_code=422, detail="An absolute source API URL is required.")
     if source.format not in {"json", "odata"}:
         raise HTTPException(status_code=422, detail="REST, CRM and ERP sources must return JSON.")
+    options = source.source_options
+    provider = options.get("provider", "generic")
+    if provider not in _SOURCE_PROVIDERS:
+        raise HTTPException(status_code=422, detail="Unsupported CRM or ERP provider adapter.")
+    defaults = _SOURCE_PROVIDERS[provider]
+    if defaults["kind"] and source.kind != defaults["kind"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"The {provider} adapter requires a {defaults['kind']} source.",
+        )
+    if defaults["format"] and source.format != defaults["format"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"The {provider} adapter requires {defaults['format']} format.",
+        )
     _validate_source_url(source.endpoint, config, expected_host=None)
 
 
@@ -112,11 +158,10 @@ def _validate_source_url(url: str, config: Settings, expected_host: str | None) 
 
 
 def list_data_sources(session: Session, config: Settings) -> list[dict[str, Any]]:
-    del config
     items = session.scalars(
         select(DataSourceRecord).order_by(desc(DataSourceRecord.created_at))
     ).all()
-    return [serialize_data_source(item) for item in items]
+    return [serialize_data_source(item, config) for item in items]
 
 
 def register_data_source(
@@ -151,12 +196,14 @@ def register_data_source(
         details={"kind": record.kind, "format": record.format, "scope": record.scope},
     )
     session.commit()
-    return serialize_data_source(record)
+    return serialize_data_source(record, config)
 
 
 def _field(value: Any, path: str | None) -> Any:
     if not path:
         return None
+    if isinstance(value, dict) and path in value:
+        return value[path]
     current = value
     for name in path.split("."):
         if isinstance(current, dict):
@@ -173,10 +220,15 @@ def _records_from_page(
     payload: Any, options: dict[str, Any], source_format: str
 ) -> list[dict[str, Any]]:
     configured_path = options.get("records_path")
+    provider_defaults = _SOURCE_PROVIDERS.get(options.get("provider", "generic"), {})
     candidates = (
         [configured_path]
         if configured_path
-        else (["value"] if source_format == "odata" else ["records", "items", "data"])
+        else (
+            [provider_defaults["records_path"]]
+            if provider_defaults.get("records_path")
+            else (["value"] if source_format == "odata" else ["records", "items", "data"])
+        )
     )
     records = payload if isinstance(payload, list) else None
     for path in candidates:
@@ -207,7 +259,8 @@ def _read_api_records(
                 status_code=424, detail=f"Data-source secret {source.auth_env} is missing."
             )
         headers["Authorization"] = f"Bearer {token}"
-    max_pages = int(options.get("max_pages", 1))
+    provider = options.get("provider", "generic")
+    max_pages = int(options.get("max_pages", 10 if provider != "generic" else 1))
     max_records = int(options.get("max_records", 500))
     query_params = options.get("query_params", {})
     if not isinstance(query_params, dict):
@@ -233,14 +286,18 @@ def _read_api_records(
                 records = records[:max_records]
                 if len(records) >= max_records:
                     break
-                next_field = options.get("next_field") or (
-                    "@odata.nextLink" if source.format == "odata" else None
+                provider_defaults = _SOURCE_PROVIDERS.get(provider, {})
+                next_field = (
+                    options.get("next_field")
+                    or provider_defaults.get("next_field")
+                    or ("@odata.nextLink" if source.format == "odata" else None)
                 )
-                next_url = _field(page, next_field) if next_field else None
-                if next_url is not None and not isinstance(next_url, str):
+                next_value = _field(page, next_field) if next_field else None
+                if next_value is not None and not isinstance(next_value, str):
                     raise HTTPException(
                         status_code=502, detail="Pagination link must be a URL string."
                     )
+                next_url = urljoin(base_url, next_value) if next_value else None
     except HTTPException:
         raise
     except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
@@ -424,7 +481,7 @@ def sync_data_source(
         )
         session.commit()
         return {
-            "source": serialize_data_source(source),
+            "source": serialize_data_source(source, config),
             "records_received": len(loaded),
             "documents_updated": count,
         }
@@ -529,7 +586,7 @@ def queue_data_source_sync(
     source.last_sync_status = "queued"
     source.last_sync_error = None
     session.commit()
-    return {"source": serialize_data_source(source), "status": "queued"}
+    return {"source": serialize_data_source(source, config), "status": "queued"}
 
 
 def disable_data_source(

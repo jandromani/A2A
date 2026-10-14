@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2a-tools-sdk"
+version = "0.1.0"
+description = "Typed, permission-aware tool registry and MCP adapter for A2A agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = ["pydantic>=2.11,<3"]
+
+[project.optional-dependencies]
+mcp = ["mcp>=2,<3"]
+dev = ["pytest>=8,<10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["a2a_tools_sdk*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

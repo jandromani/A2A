@@ -725,6 +725,9 @@ async function registerDataSource(event) {
   submit.disabled = true;
   try {
     const options = JSON.parse(document.getElementById("data-source-options").value || "{}");
+    const provider = document.getElementById("data-source-provider").value;
+    if (provider === "generic") delete options.provider;
+    else options.provider = provider;
     const authEnv = document.getElementById("data-source-auth").value.trim();
     await api("/api/v1/data-sources", {
       method: "POST",
@@ -774,20 +777,42 @@ async function disableDataSource(id) {
 }
 
 function updateDataSourceForm() {
-  const lake = document.getElementById("data-source-kind").value === "data_lake";
+  const kind = document.getElementById("data-source-kind").value;
+  const lake = kind === "data_lake";
   const format = document.getElementById("data-source-format");
   const endpoint = document.getElementById("data-source-endpoint");
   const optionsBox = document.getElementById("data-source-options");
+  const providerSelect = document.getElementById("data-source-provider");
+  const providerLabel = document.getElementById("data-source-provider-label");
+  const providerChoices = {
+    rest: [["generic", "API genérica"]],
+    crm: [["generic", "API genérica"], ["hubspot", "HubSpot CRM"], ["salesforce", "Salesforce"]],
+    erp: [["generic", "API genérica"], ["sap_odata", "SAP OData"]],
+    data_lake: []
+  }[kind] || [];
+  const currentProvider = providerSelect.value;
+  providerSelect.replaceChildren(...providerChoices.map(([value, label]) => new Option(label, value)));
+  if (providerChoices.some(([value]) => value === currentProvider)) providerSelect.value = currentProvider;
+  const provider = providerSelect.value || "generic";
+  providerSelect.classList.toggle("hidden", providerChoices.length < 2);
+  providerLabel.classList.toggle("hidden", providerChoices.length < 2);
   if (lake) {
     if (!["csv", "parquet"].includes(format.value)) format.value = "csv";
     endpoint.placeholder = "./documentos.csv";
   } else {
-    if (["csv", "parquet"].includes(format.value)) format.value = "json";
-    endpoint.placeholder = "https://crm.example/api/records";
+    if (["csv", "parquet"].includes(format.value) || provider === "sap_odata") {
+      format.value = provider === "sap_odata" ? "odata" : "json";
+    }
+    if (provider === "hubspot") endpoint.placeholder = "https://api.hubapi.com/crm/v3/objects/contacts";
+    else if (provider === "salesforce") endpoint.placeholder = "https://acme.my.salesforce.com/services/data/vXX.X/query";
+    else if (provider === "sap_odata") endpoint.placeholder = "https://sap.example/sap/opu/odata/sap/API_BUSINESS_PARTNER/A_BusinessPartner";
+    else endpoint.placeholder = "https://crm.example/api/records";
   }
   try {
     const options = JSON.parse(optionsBox.value || "{}");
-    if (format.value === "odata" && options.records_path === "records" && !options.next_field) {
+    if (provider === "generic") delete options.provider;
+    else options.provider = provider;
+    if (format.value === "odata" && !options.records_path && !options.next_field) {
       options.records_path = "value";
       options.next_field = "@odata.nextLink";
       optionsBox.value = JSON.stringify(options, null, 2);
@@ -1224,6 +1249,7 @@ document.getElementById("refresh-custom-workflows").addEventListener("click", lo
 document.getElementById("data-source-form").addEventListener("submit", registerDataSource);
 document.getElementById("data-source-kind").addEventListener("change", updateDataSourceForm);
 document.getElementById("data-source-format").addEventListener("change", updateDataSourceForm);
+document.getElementById("data-source-provider").addEventListener("change", updateDataSourceForm);
 document.getElementById("refresh-data-sources").addEventListener("click", loadDataSources);
 document.getElementById("github-search-form").addEventListener("submit", searchGithub);
 document.getElementById("github-comment-form").addEventListener("submit", requestGithubComment);

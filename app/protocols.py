@@ -102,6 +102,73 @@ def a2a_agent_card(public_url: str, config: Settings | None = None) -> dict[str,
     return card
 
 
+def anp_discovery_document(public_url: str) -> dict[str, Any]:
+    """ANP-08 active discovery index for the public A2A agent description."""
+    base = public_url.rstrip("/")
+    description_url = f"{base}/agents/a2a/ad.json"
+    return {
+        "@context": {
+            "@vocab": "https://schema.org/",
+            "did": "https://w3id.org/did#",
+            "ad": "https://agent-network-protocol.com/ad#",
+        },
+        "@type": "CollectionPage",
+        "url": f"{base}/.well-known/agent-descriptions",
+        "items": [
+            {
+                "@type": "ad:AgentDescription",
+                "name": "Agentic Atlas Platform",
+                "@id": description_url,
+            }
+        ],
+    }
+
+
+def anp_agent_description(public_url: str) -> dict[str, Any]:
+    """ANP-07 public description for interfaces that the deployment actually exposes."""
+    base = public_url.rstrip("/")
+    return {
+        "protocolType": "ANP",
+        "protocolVersion": "1.0.0",
+        "type": "AgentDescription",
+        "url": f"{base}/agents/a2a/ad.json",
+        "name": "Agentic Atlas Platform",
+        "description": (
+            "Governed agent workflows for scoped corporate knowledge, technical inventory, "
+            "and operational incidents with human approval for external writes."
+        ),
+        "interfaces": [
+            {
+                "type": "StructuredInterface",
+                "protocol": "A2A",
+                "version": A2A_PROTOCOL_VERSION,
+                "url": f"{base}/a2a-sdk/",
+                "description": (
+                    "A2A JSON-RPC agent tasks with bearer authentication in protected deployments."
+                ),
+            },
+            {
+                "type": "StructuredInterface",
+                "protocol": "MCP",
+                "version": MCP_PROTOCOL_VERSION,
+                "url": f"{base}/mcp-sdk/",
+                "description": "MCP Streamable HTTP tools with caller authorization.",
+            },
+            {
+                "type": "StructuredInterface",
+                "protocol": "Agora",
+                "version": "1.0",
+                "url": f"{base}/agora",
+                "description": "Agora single-round and durable multi-round task bridge.",
+            },
+        ],
+        "x-authentication": "HTTP Bearer; see the A2A Agent Card for protected deployments.",
+        "x-anp-coverage": (
+            "ANP-07/08 description and active discovery; no DID-WBA messaging identity is claimed."
+        ),
+    }
+
+
 def _a2a_task(task: TaskRecord) -> dict[str, Any]:
     states = {
         "running": "TASK_STATE_WORKING",
@@ -218,60 +285,43 @@ def handle_a2a(
 
 
 def mcp_tools() -> list[dict[str, Any]]:
+    from app.tool_contracts import (
+        GetTaskStatusInput,
+        ListCapabilitiesInput,
+        RunAgentWorkflowInput,
+        SearchKnowledgeInput,
+    )
+
+    definitions = [
+        (
+            "run_agent_workflow",
+            "Run a governed knowledge, technical inventory, or incident workflow. "
+            "Incident writes always wait for human approval.",
+            RunAgentWorkflowInput,
+        ),
+        (
+            "search_knowledge",
+            "Search source documents within the caller's granted scopes.",
+            SearchKnowledgeInput,
+        ),
+        (
+            "list_capabilities",
+            "List registered agents, workflows, and tools.",
+            ListCapabilitiesInput,
+        ),
+        (
+            "get_task_status",
+            "Read a task and its current governed status.",
+            GetTaskStatusInput,
+        ),
+    ]
     return [
         {
-            "name": "run_agent_workflow",
-            "description": (
-                "Run a governed knowledge, technical inventory, or incident workflow. "
-                "Incident writes always wait for human approval."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "scenario": {"type": "string", "enum": ["knowledge", "report", "incident"]},
-                    "message": {"type": "string", "minLength": 3},
-                    "artifacts": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "path": {"type": "string"},
-                                "content": {"type": "string"},
-                            },
-                            "required": ["path", "content"],
-                        },
-                    },
-                    "issue_key": {"type": "string"},
-                },
-                "required": ["scenario", "message"],
-            },
-        },
-        {
-            "name": "search_knowledge",
-            "description": "Search source documents within the caller's granted scopes.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"query": {"type": "string", "minLength": 2}},
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "list_capabilities",
-            "description": "List registered agents, workflows, and tools.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"kind": {"type": "string"}},
-            },
-        },
-        {
-            "name": "get_task_status",
-            "description": "Read a task and its current governed status.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"task_id": {"type": "string"}},
-                "required": ["task_id"],
-            },
-        },
+            "name": name,
+            "description": description,
+            "inputSchema": model.model_json_schema(),
+        }
+        for name, description, model in definitions
     ]
 
 

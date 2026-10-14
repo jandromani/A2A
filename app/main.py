@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.advisors import list_advisors, review_task
+from app.agora import handle_agora_request
 from app.audit import replay_task_timeline, verify_audit_chain
 from app.config import Settings, settings
 from app.connectors import (
@@ -67,6 +68,8 @@ from app.protocols import (
     MCP_PROTOCOL_VERSION,
     SUPPORTED_MCP_VERSIONS,
     a2a_agent_card,
+    anp_agent_description,
+    anp_discovery_document,
     check_mcp_origin,
     handle_a2a,
     handle_mcp,
@@ -284,6 +287,12 @@ def create_app(config: Settings | None = None, database_url: str | None = None) 
             "protocols": {
                 "a2a": "A2A 1.0 official SDK · /a2a-sdk/",
                 "mcp": f"MCP official SDK · {MCP_PROTOCOL_VERSION} · /mcp-sdk/",
+                "anp": (
+                    "ANP 1.1 public description and active discovery · "
+                    "/.well-known/agent-descriptions"
+                ),
+                "agora": "Agora 1.0 single and multi-round · /agora",
+                "acp": "ACP migration target · A2A",
             },
             "secrets_in_database": False,
         }
@@ -835,6 +844,43 @@ def create_app(config: Settings | None = None, database_url: str | None = None) 
     @app.get("/.well-known/agent-card.json", include_in_schema=False)
     def agent_card(request: Request):
         return a2a_agent_card(request.app.state.settings.public_url, request.app.state.settings)
+
+    @app.get("/.well-known/agent-descriptions", include_in_schema=False)
+    def anp_discovery(request: Request):
+        return anp_discovery_document(request.app.state.settings.public_url)
+
+    @app.get("/agents/a2a/ad.json", include_in_schema=False)
+    def anp_description(request: Request):
+        return anp_agent_description(request.app.state.settings.public_url)
+
+    @app.get("/agora/wellknown", include_in_schema=False)
+    def agora_wellknown():
+        return {}
+
+    @app.post("/agora", include_in_schema=False)
+    def agora(
+        payload: dict[str, Any],
+        request: Request,
+        db: Session = Depends(get_db),
+        principal: Principal = Depends(get_principal),
+    ):
+        return handle_agora_request(payload, db, request.app.state.settings, principal)
+
+    @app.post("/agora/conversations/{conversation_id}", include_in_schema=False)
+    def agora_conversation(
+        conversation_id: str,
+        payload: dict[str, Any],
+        request: Request,
+        db: Session = Depends(get_db),
+        principal: Principal = Depends(get_principal),
+    ):
+        return handle_agora_request(
+            payload,
+            db,
+            request.app.state.settings,
+            principal,
+            conversation_id=conversation_id,
+        )
 
     @app.post("/a2a", include_in_schema=False)
     def a2a(

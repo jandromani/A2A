@@ -10,9 +10,11 @@ La entrega cubre los tres recorridos descritos en el mapa:
 
 La consola web incluye el mapa maestro navegable (123 componentes, decisiones técnicas, criterios de aceptación, conexiones propuestas y tres recorridos guiados). La API funciona en local con SQLite y reglas deterministas. PostgreSQL con pgvector, Valkey Streams, OPA, Keycloak, Jira y proveedores OpenAI, Anthropic, Groq, Ollama u OpenAI-compatible se activan mediante configuración. Las claves se resuelven desde el entorno, archivos montados o Vault y no se guardan en la base de datos.
 
-Además de los tres recorridos de ejemplo, la consola permite crear flujos declarativos por pasos. La memoria conversacional y los checkpoints son persistentes y están aislados por usuario y contexto. El catálogo de fuentes incluye REST/CRM/ERP, archivos CSV/Parquet y recepción de eventos. GitHub y Gmail disponen de conectores propios; toda escritura crea una aprobación visible antes de ejecutarse.
+Además de los tres recorridos de ejemplo, la consola permite crear flujos declarativos por pasos. La memoria conversacional y los checkpoints son persistentes y están aislados por usuario y contexto. El catálogo de fuentes incluye REST, HubSpot, Salesforce, SAP OData, archivos CSV/Parquet y recepción de eventos. GitHub y Gmail disponen de conectores propios; toda escritura crea una aprobación visible antes de ejecutarse.
 
-La consola de Sistema permite registrar y sincronizar fuentes REST/CRM/ERP y archivos del lake, buscar incidencias GitHub y solicitar comentarios, buscar y leer correo Gmail y solicitar envíos. Toda escritura externa queda en la cola de aprobación humana. También registra y prueba servidores MCP y agentes A2A remotos; cada llamada queda auditada. En producción, los conectores salientes exigen HTTPS y un hostname incluido en `CONNECTOR_ALLOWED_HOSTS`.
+`packages/tools-sdk` publica el paquete independiente y versionado `a2a-tools-sdk` (0.1.0) para declarar herramientas Pydantic, comprobar scopes e instalarlas en servidores MCP. La plataforma usa este SDK al publicar sus herramientas MCP oficiales. La consola de Sistema permite registrar y sincronizar fuentes REST/CRM/ERP y archivos del lake, buscar incidencias GitHub y solicitar comentarios, buscar y leer correo Gmail y solicitar envíos. Toda escritura externa queda en la cola de aprobación humana. También registra y prueba servidores MCP, agentes A2A y agentes Agora remotos; cada llamada queda auditada. En producción, los conectores salientes exigen HTTPS y un hostname incluido en `CONNECTOR_ALLOWED_HOSTS`.
+
+La plataforma expone descubrimiento activo ANP 1.1 (`/.well-known/agent-descriptions`) y una descripción ANP de sus interfaces A2A, MCP y Agora. La cobertura ANP se limita a ADP/ADSP: no anuncia identidad DID-WBA, mensajería ANP ni negociación del meta-protocolo. El puente Agora 1.0 acepta mensajes de una ronda y conversaciones duraderas ligadas al actor autenticado. ACP no se duplica como runtime: su desarrollo se incorporó a A2A bajo Linux Foundation ([aviso de transición](https://lfaidata.foundation/communityblog/2025/08/29/acp-joins-forces-with-a2a-under-the-linux-foundations-lf-ai-data/)).
 
 ## Ejecutar en local
 
@@ -20,7 +22,7 @@ Requiere Python 3.11 o posterior.
 
     python -m venv .venv
     source .venv/bin/activate
-    python -m pip install -e ".[dev]"
+    python -m pip install -e ".[dev]" -e "./packages/tools-sdk"
     cp .env.example .env
     uvicorn app.main:app --host 127.0.0.1 --port 8000
 
@@ -67,7 +69,7 @@ Los flujos configurables admiten `knowledge.search`, `model.generate`, `connecto
 
 La memoria conversacional conserva hasta `CONVERSATION_MEMORY_TURNS` turnos durante `CONVERSATION_MEMORY_TTL_DAYS`. La consola mantiene un identificador de conversación en el navegador y permite iniciar otra sin borrar la anterior. La API expone lectura y borrado de contexto; otro usuario no puede leerlo.
 
-Las fuentes CRM y ERP usan el adaptador REST configurable, con campos de mapeo, paginación, allowlist de hosts y secretos por nombre de variable de entorno. Data lake admite CSV y Parquet dentro de `DATA_LAKE_ROOT`. Los pipelines pueden enviar lotes JSON por la ruta de eventos; el worker los procesa mediante Valkey Streams y mantiene el outbox SQL para recuperación. En Compose el worker y el modo de ejecución en cola están activados por defecto.
+Las fuentes ofrecen adaptador genérico y perfiles de paginación para HubSpot CRM (`results` y `paging.next.link`), Salesforce (`records` y `nextRecordsUrl`) y SAP OData (`value` y `@odata.nextLink`). Usa `source_options.provider` con `hubspot`, `salesforce` o `sap_odata`; la URL base, los campos mapeados, el límite de páginas y el allowlist siguen siendo configuración explícita. Salesforce recibe el SOQL en `source_options.query_params.q`; HubSpot y SAP aceptan `query_params` para sus filtros. Cada enlace de paginación se valida para que permanezca en el host configurado. Data lake admite CSV y Parquet dentro de `DATA_LAKE_ROOT`. Los pipelines pueden enviar lotes JSON por la ruta de eventos; el worker los procesa mediante Valkey Streams y mantiene el outbox SQL para recuperación. En Compose el worker y el modo de ejecución en cola están activados por defecto.
 
 En el flujo de incidencia, dejar la clave de Jira vacía usa un caso sintético local claramente etiquetado. Con JIRA_BASE_URL, JIRA_EMAIL y JIRA_API_TOKEN se leen incidencias reales. La aprobación publica el borrador como comentario Jira. Sin esos tres valores, una clave de Jira se rechaza y no se presenta como una operación completada.
 
@@ -78,6 +80,8 @@ En el flujo de incidencia, dejar la clave de Jira vacía usa un caso sintético 
 - Métricas Prometheus: /metrics
 - A2A 1.0 mediante el SDK oficial: /.well-known/agent-card.json y /a2a-sdk/. El adaptador anterior `/a2a` sigue disponible para clientes compatibles.
 - MCP Streamable HTTP mediante el SDK oficial: `/mcp-sdk/`. El adaptador anterior `/mcp` mantiene compatibilidad con revisiones MCP publicadas y con clientes existentes.
+- ANP ADSP 1.1: `/.well-known/agent-descriptions` y `/agents/a2a/ad.json`.
+- Agora Protocol 1.0: `GET /agora/wellknown`, `POST /agora` y `POST /agora/conversations/{conversationId}`.
 
 Ejemplo A2A para crear una consulta de conocimiento:
 
@@ -94,6 +98,9 @@ La respuesta contiene un task id, estado, resultado estructurado y referencias a
 | --- | --- | --- |
 | GET | /api/v1/dashboard | Indicadores operativos |
 | GET | /api/v1/catalog | Agentes, flujos y herramientas |
+| GET | /api/v1/hubs | Índices de solo lectura de agentes, MCP, tools, APIs y skills |
+| GET | /api/v1/advisors | Revisores deterministas de arquitectura, ingeniería, calidad y gobierno |
+| POST | /api/v1/tasks/{id}/advisors/{advisor}/reviews | Revisión asesorativa; no concede autoridad de aprobación |
 | GET/POST | /api/v1/knowledge | Consultar o añadir documentos |
 | DELETE | /api/v1/knowledge/{id} | Desactivar una fuente |
 | GET/POST | /api/v1/tasks | Consultar o ejecutar tareas |
@@ -105,6 +112,11 @@ La respuesta contiene un task id, estado, resultado estructurado y referencias a
 | GET/POST | /api/v1/data-sources | Registrar y consultar fuentes REST, CRM, ERP o data lake |
 | POST | /api/v1/data-sources/{id}/sync | Sincronizar una fuente |
 | POST | /api/v1/data-sources/{id}/events | Ingerir un lote de pipeline |
+| GET | /.well-known/agent-descriptions | Descubrimiento activo ANP 1.1 |
+| GET | /agents/a2a/ad.json | Descripción de interfaces ANP |
+| GET | /agora/wellknown | Protocolos Agora admitidos |
+| POST | /agora | Intercambio Agora o inicio de conversación |
+| POST | /agora/conversations/{id} | Continuar conversación Agora ligada al actor |
 | GET | /api/v1/integrations/github/{owner}/{repo}/issues | Leer incidencias GitHub |
 | POST | /api/v1/integrations/github/{owner}/{repo}/issues/{number}/comments | Solicitar comentario GitHub, sujeto a aprobación |
 | GET | /api/v1/integrations/gmail/search | Buscar correo Gmail |
@@ -119,7 +131,7 @@ La respuesta contiene un task id, estado, resultado estructurado y referencias a
 | GET/POST | /api/v1/agent-identities | Registro y consulta de identidades de agentes |
 | POST | /api/v1/agent-identities/{client_id}/{action} | Cambio auditado: `activate`, `suspend` o `revoke` |
 | GET | /api/v1/system | Estado sin revelar secretos |
-| GET/POST | /api/v1/connectors | Listar o registrar conectores A2A/MCP |
+| GET/POST | /api/v1/connectors | Listar o registrar conectores A2A, MCP, Agora o REST |
 | DELETE | /api/v1/connectors/{id} | Desactivar un conector |
 | POST | /api/v1/connectors/{id}/enable | Reactivar un conector |
 | GET | /api/v1/connectors/{id}/tools | Consultar herramientas de un servidor MCP |
@@ -154,7 +166,7 @@ Las rutas de identidad son `GET/POST /api/v1/agent-identities` y `POST /api/v1/a
 
 ## Despliegue de producción
 
-`deploy/aws/production` crea una VPC multi-AZ, EKS, PostgreSQL RDS Multi-AZ con pgvector, Valkey Multi-AZ con TLS, EFS RWX, backup de EFS, repositorios ECR privados y buckets S3 separados para backups y auditoría con Object Lock COMPLIANCE, KMS e IAM limitado por workload. `deploy/k8s` contiene configuración, PVC EFS, OPA, ingress/TLS, gateway de entrada para APIs y A2A/MCP, gateway de modelos, API, workers, migración, backups y archivado WORM. Consulta [la guía de despliegue AWS](deploy/aws/production/README.md) para aprovisionar el estado remoto, publicar imágenes, inicializar Vault, renderizar manifiestos y ejecutar la puerta de producción. Los secretos y los valores específicos de cada cuenta se quedan fuera del repositorio.
+`deploy/aws/production` crea una VPC multi-AZ, EKS, PostgreSQL RDS Multi-AZ con pgvector, Valkey Multi-AZ con TLS, EFS RWX, backup de EFS, repositorios ECR privados y buckets S3 separados para backups y auditoría con Object Lock COMPLIANCE, KMS e IAM limitado por workload. `deploy/k8s` contiene configuración, PVC EFS, OPA, ingress/TLS, gateway de entrada para APIs y los endpoints A2A, MCP, ANP y Agora, gateway de modelos, API, workers, migración, backups y archivado WORM. El gateway enruta ANP y Agora por la ruta HTTP de la plataforma; A2A y MCP tienen rutas dedicadas. Consulta [la guía de despliegue AWS](deploy/aws/production/README.md) para aprovisionar el estado remoto, publicar imágenes, inicializar Vault, renderizar manifiestos y ejecutar la puerta de producción. Los secretos y los valores específicos de cada cuenta se quedan fuera del repositorio.
 
 El Job de migración es versionado por release; el activador espera su éxito antes de dirigir tráfico al API. El CronJob `a2a-postgres-backup` valida el archivo con `pg_restore --list`, publica el dump custom-format, su SHA-256 y el archivo del lake. La activación toma una primera copia y la restaura en un PostgreSQL temporal aislado; el CronJob `a2a-postgres-restore-verification` repite semanalmente la descarga, la comprobación del checksum y la restauración del esquema en un volumen EBS cifrado efímero. `a2a-audit-archive` valida la cadena SQL y archiva cada entrada con retención Object Lock COMPLIANCE; también detecta versiones duplicadas y marcadores de borrado. El activador ejecuta `a2a-production-preflight` tras el primer archivado para comprobar Keycloak, Vault, PostgreSQL, Valkey, OPA, Langfuse, el gateway de modelos y paridad WORM.
 

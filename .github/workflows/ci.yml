@@ -18,10 +18,10 @@ jobs:
           python-version: "${{ matrix.python-version }}"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev]"
-      - run: ruff check app tests migrations deploy
-      - run: ruff format --check app tests migrations deploy
-      - run: pytest --cov=app --cov-report=term-missing
+      - run: python -m pip install -e ".[dev]" -e "./packages/tools-sdk"
+      - run: ruff check app tests migrations deploy packages/tools-sdk/src packages/tools-sdk/tests
+      - run: ruff format --check app tests migrations deploy packages/tools-sdk/src packages/tools-sdk/tests
+      - run: pytest --cov=app --cov-report=term-missing tests packages/tools-sdk/tests
       - run: node --check app/static/app.js
       - run: bash -n deploy/k8s/cluster-addons.sh deploy/aws/production/*.sh
       - run: python -m json.tool deploy/aws/production/aws-load-balancer-controller-policy.json > /dev/null

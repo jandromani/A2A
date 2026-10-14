@@ -446,6 +446,73 @@ def _mcp_exchange_legacy(
     return result.get("result", {})
 
 
+def _agora_exchange(
+    connector: ConnectorRecord,
+    config: Settings,
+    body: ConnectorInvoke,
+) -> dict[str, Any]:
+    if body.conversation_id and not all(
+        character.isalnum() or character in "-_" for character in body.conversation_id
+    ):
+        raise HTTPException(
+            status_code=422, detail="Agora conversation id contains unsafe characters."
+        )
+    endpoint = connector.endpoint
+    if body.conversation_id:
+        endpoint = _rest_target(
+            connector.endpoint,
+            f"conversations/{body.conversation_id}",
+            config,
+        )
+    else:
+        validate_outbound_endpoint(endpoint, config)
+    content: bytes
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=False) as client:
+            with client.stream(
+                "POST",
+                endpoint,
+                headers=_headers(connector, config, "application/json"),
+                json={
+                    "body": {
+                        **body.arguments,
+                        **body.metadata,
+                        "scenario": body.scenario,
+                        **({"message": body.message} if body.message else {}),
+                    },
+                    **(
+                        {"multiround": True} if body.multiround and not body.conversation_id else {}
+                    ),
+                },
+            ) as response:
+                response.raise_for_status()
+                if int(response.headers.get("content-length", "0") or 0) > 1_000_000:
+                    raise HTTPException(status_code=502, detail="Agora response exceeds 1 MB.")
+                content_buffer = bytearray()
+                for chunk in response.iter_bytes():
+                    content_buffer.extend(chunk)
+                    if len(content_buffer) > 1_000_000:
+                        raise HTTPException(status_code=502, detail="Agora response exceeds 1 MB.")
+                content = bytes(content_buffer)
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Agora server returned HTTP {exc.response.status_code}."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Agora request failed.") from exc
+    try:
+        result = json.loads(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Agora server returned invalid JSON.") from exc
+    if not isinstance(result, dict) or result.get("status") not in {"success", "failure"}:
+        raise HTTPException(status_code=502, detail="Agora response is missing a valid status.")
+    if result.get("status") == "failure" and not isinstance(result.get("error"), str):
+        raise HTTPException(status_code=502, detail="Agora failure response is missing its error.")
+    return result
+
+
 def mcp_tools(
     session: Session,
     config: Settings,
@@ -504,6 +571,14 @@ def invoke_connector(
         )
         output = {"protocol": "mcp", "response": response}
         operation = "connector.mcp.tools_call"
+    elif record.kind == "agora":
+        if not body.message and not body.arguments:
+            raise HTTPException(
+                status_code=422, detail="An Agora message or body object is required."
+            )
+        response = _agora_exchange(record, config, body)
+        output = {"protocol": "agora", "response": response}
+        operation = "connector.agora.exchange"
     else:
         response = _rest_request(
             record,
@@ -523,7 +598,13 @@ def invoke_connector(
         record.id,
         details={
             "kind": record.kind,
-            "remote_operation": "message/send" if record.kind == "a2a" else body.tool_name,
+            "remote_operation": (
+                "message/send"
+                if record.kind == "a2a"
+                else "exchange"
+                if record.kind == "agora"
+                else body.tool_name
+            ),
         },
     )
     session.commit()

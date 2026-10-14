@@ -70,7 +70,6 @@ def _mark_published(factory: sessionmaker[Session], event_id: str) -> None:
         if event and event.status == "pending":
             event.status = "published"
             event.published_at = datetime.now(UTC)
-            event.attempts += 1
             session.commit()
 
 

@@ -80,13 +80,21 @@ def _mcp_principal(context: Any) -> Principal:
 
 
 def build_mcp_sdk_app(config: Settings, factory):
+    from a2a_tools_sdk import ToolContext, ToolRegistry
     from mcp.server import MCPServer
-    from mcp.server.mcpserver import Context
     from mcp.server.transport_security import TransportSecuritySettings
 
     from app.custom_workflows import list_workflow_definitions, run_workflow_definition
     from app.policy import authorize
-    from app.services import get_task, list_capabilities, serialize_task
+    from app.services import create_task, get_task, list_capabilities, serialize_task
+    from app.tool_contracts import (
+        EmptyToolInput,
+        GetTaskStatusInput,
+        ListCapabilitiesInput,
+        RunAgentWorkflowInput,
+        RunCustomWorkflowInput,
+        SearchKnowledgeInput,
+    )
     from app.workflows.engine import _search_documents
 
     server = MCPServer(
@@ -100,39 +108,36 @@ def build_mcp_sdk_app(config: Settings, factory):
     async def run_sync(func, *args):
         return await asyncio.to_thread(func, *args)
 
-    def run_task_sync(scenario, message, artifacts, issue_key, context_id, principal):
-        from app.services import create_task
-
-        with factory() as session:
-            request = TaskCreate(
-                scenario=scenario,
-                message=message,
-                artifacts=artifacts,
-                issue_key=issue_key,
-                context_id=context_id,
-            )
-            return serialize_task(create_task(session, config, request, principal))
-
-    @server.tool()
-    async def run_agent_workflow(
-        scenario: str,
-        message: str,
-        ctx: Context,
-        artifacts: list[dict[str, str]] | None = None,
-        issue_key: str | None = None,
-        context_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Run a governed knowledge, technical inventory, or incident workflow."""
-        principal = _mcp_principal(ctx)
-        return await run_sync(
-            run_task_sync,
-            scenario,
-            message,
-            artifacts or [],
-            issue_key,
-            context_id,
-            principal,
+    def principal_from_context(context: ToolContext) -> Principal:
+        return Principal(
+            subject=context.subject,
+            roles=context.roles,
+            scopes=context.scopes,
         )
+
+    def sdk_context(mcp_context: Any) -> ToolContext:
+        principal = _mcp_principal(mcp_context)
+        return ToolContext(
+            subject=principal.subject,
+            scopes=principal.scopes,
+            roles=principal.roles,
+        )
+
+    registry = ToolRegistry()
+
+    def run_task_sync(request: RunAgentWorkflowInput, principal: Principal):
+        with factory() as session:
+            task_request = TaskCreate(
+                scenario=request.scenario,
+                message=request.message,
+                artifacts=request.artifacts,
+                issue_key=request.issue_key,
+                context_id=request.context_id,
+            )
+            return serialize_task(create_task(session, config, task_request, principal))
+
+    async def run_workflow_tool(arguments: RunAgentWorkflowInput, context: ToolContext):
+        return await run_sync(run_task_sync, arguments, principal_from_context(context))
 
     def search_sync(query: str, principal: Principal):
         with factory() as session:
@@ -153,38 +158,33 @@ def build_mcp_sdk_app(config: Settings, factory):
                 ]
             }
 
-    @server.tool()
-    async def search_knowledge(query: str, ctx: Context) -> dict[str, Any]:
-        """Search knowledge documents inside the authenticated caller's scopes."""
-        return await run_sync(search_sync, query, _mcp_principal(ctx))
+    async def search_knowledge_tool(arguments: SearchKnowledgeInput, context: ToolContext):
+        return await run_sync(search_sync, arguments.query, principal_from_context(context))
 
     def capabilities_sync(kind: str | None):
         with factory() as session:
             return {"capabilities": list_capabilities(session, kind)}
 
-    @server.tool()
-    async def list_capability_catalog(ctx: Context, kind: str | None = None) -> dict[str, Any]:
-        """List registered agents, workflows, tools, and APIs."""
-        _mcp_principal(ctx)
-        return await run_sync(capabilities_sync, kind)
+    async def list_capabilities_tool(arguments: ListCapabilitiesInput, _context: ToolContext):
+        return await run_sync(capabilities_sync, arguments.kind)
 
     def task_status_sync(task_id: str, principal: Principal):
         with factory() as session:
             return serialize_task(get_task(session, task_id, principal))
 
-    @server.tool()
-    async def get_task_status(task_id: str, ctx: Context) -> dict[str, Any]:
-        """Read a task only when it belongs to the caller or their role can inspect it."""
-        return await run_sync(task_status_sync, task_id, _mcp_principal(ctx))
+    async def get_task_status_tool(arguments: GetTaskStatusInput, context: ToolContext):
+        return await run_sync(
+            task_status_sync,
+            arguments.task_id,
+            principal_from_context(context),
+        )
 
     def workflows_sync():
         with factory() as session:
             return {"items": list_workflow_definitions(session)}
 
-    @server.tool()
-    async def list_workflows(ctx: Context) -> dict[str, Any]:
-        """List enabled declarative workflows that can be started by this caller."""
-        principal = _mcp_principal(ctx)
+    async def list_workflows_tool(_arguments: EmptyToolInput, context: ToolContext):
+        principal = principal_from_context(context)
         allowed, reason = authorize(principal, "workflow.run", {}, config)
         if not allowed:
             raise HTTPException(status_code=403, detail=reason)
@@ -201,21 +201,55 @@ def build_mcp_sdk_app(config: Settings, factory):
             )
             return result
 
-    @server.tool()
-    async def run_custom_workflow(
-        workflow_id: str,
-        input: dict[str, Any],
-        ctx: Context,
-        context_id: str | None = None,
+    async def run_custom_workflow_tool(
+        arguments: RunCustomWorkflowInput,
+        context: ToolContext,
     ) -> dict[str, Any]:
-        """Start an administrator-defined workflow with a JSON input object."""
         return await run_sync(
             run_defined_sync,
-            workflow_id,
-            input,
-            context_id,
-            _mcp_principal(ctx),
+            arguments.workflow_id,
+            arguments.input,
+            arguments.context_id,
+            principal_from_context(context),
         )
+
+    registry.register(
+        "run_agent_workflow",
+        "Run a governed knowledge, technical inventory, or incident workflow.",
+        RunAgentWorkflowInput,
+        run_workflow_tool,
+    )
+    registry.register(
+        "search_knowledge",
+        "Search knowledge documents inside the authenticated caller's scopes.",
+        SearchKnowledgeInput,
+        search_knowledge_tool,
+    )
+    registry.register(
+        "list_capability_catalog",
+        "List registered agents, workflows, tools, and APIs.",
+        ListCapabilitiesInput,
+        list_capabilities_tool,
+    )
+    registry.register(
+        "get_task_status",
+        "Read a task only when it belongs to the caller or their role can inspect it.",
+        GetTaskStatusInput,
+        get_task_status_tool,
+    )
+    registry.register(
+        "list_workflows",
+        "List enabled declarative workflows that can be started by this caller.",
+        EmptyToolInput,
+        list_workflows_tool,
+    )
+    registry.register(
+        "run_custom_workflow",
+        "Start an administrator-defined workflow with a JSON input object.",
+        RunCustomWorkflowInput,
+        run_custom_workflow_tool,
+    )
+    registry.register_mcp_tools(server, context_provider=sdk_context)
 
     allowed_hosts = [
         "localhost:*",

@@ -454,6 +454,10 @@ def test_queued_github_approval_is_consumed_from_outbox(client, monkeypatch):
         "completed"
     )
     assert [call[0] for call in calls] == ["GET", "POST"]
+    assert _complete_event(client.app.state.session_factory, config, event_id)["status"] == (
+        "completed"
+    )
+    assert [call[0] for call in calls] == ["GET", "POST"]
     with client.app.state.session_factory() as session:
         approval = session.get(ApprovalRecord, approval_id)
         task = session.get(TaskRecord, requested.json()["task_id"])
@@ -461,6 +465,57 @@ def test_queued_github_approval_is_consumed_from_outbox(client, monkeypatch):
         assert approval.status == "approved"
         assert task.status == "completed"
         assert event.status == "processed"
+
+
+def test_outbox_retry_backoff_and_terminal_failure(client):
+    from app.event_worker import _event_is_due, _mark_published, _set_retry
+
+    config = Settings(
+        _env_file=None,
+        environment="test",
+        auth_mode="dev",
+        database_url=client.app.state.settings.database_url,
+    )
+    with client.app.state.session_factory() as session:
+        event = OutboxEvent(
+            topic="test.retry",
+            aggregate_id="retry-check",
+            payload_json={},
+            status="pending",
+            attempts=2,
+        )
+        session.add(event)
+        session.commit()
+        event_id = event.id
+
+    _mark_published(client.app.state.session_factory, event_id)
+    with client.app.state.session_factory() as session:
+        event = session.get(OutboxEvent, event_id)
+        assert event.status == "published"
+        assert event.attempts == 2
+
+    _set_retry(client.app.state.session_factory, config, event_id, RuntimeError("temporary"))
+    with client.app.state.session_factory() as session:
+        event = session.get(OutboxEvent, event_id)
+        assert event.attempts == 3
+        assert event.status == "published"
+        assert event.last_error == "temporary"
+        due_at = event.next_attempt_at
+        if due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=UTC)
+        assert timedelta(seconds=7) < due_at - datetime.now(UTC) <= timedelta(seconds=8)
+    assert not _event_is_due(client.app.state.session_factory, event_id)
+
+    with client.app.state.session_factory() as session:
+        event = session.get(OutboxEvent, event_id)
+        event.attempts = 9
+        session.commit()
+    _set_retry(client.app.state.session_factory, config, event_id, RuntimeError("permanent"))
+    with client.app.state.session_factory() as session:
+        event = session.get(OutboxEvent, event_id)
+        assert event.attempts == 10
+        assert event.status == "failed"
+        assert event.last_error == "permanent"
 
 
 def test_queued_workflow_resumes_after_approval_event(client):

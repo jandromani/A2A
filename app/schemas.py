@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ArtifactInput(BaseModel):
@@ -70,7 +70,7 @@ class CapabilityCreate(BaseModel):
 class ConnectorCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["a2a", "mcp", "rest"]
+    kind: Literal["a2a", "mcp", "agora", "rest"]
     name: str = Field(min_length=2, max_length=180)
     description: str = Field(default="", max_length=4_000)
     endpoint: str = Field(min_length=8, max_length=1_000)
@@ -85,6 +85,14 @@ class ConnectorCreate(BaseModel):
         "2024-11-05",
         "1.0",
     ] = "2026-07-28"
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_agora_protocol_version(cls, value: Any) -> Any:
+        if isinstance(value, dict) and value.get("kind") == "agora":
+            value = dict(value)
+            value.setdefault("protocol_version", "1.0")
+        return value
 
     @field_validator("endpoint")
     @classmethod
@@ -124,6 +132,8 @@ class ConnectorInvoke(BaseModel):
     tool_name: str | None = Field(default=None, max_length=180)
     arguments: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    multiround: bool = False
+    conversation_id: str | None = Field(default=None, max_length=120)
     path: str = Field(default="", max_length=500)
     query: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
@@ -186,6 +196,7 @@ class DataSourceCreate(BaseModel):
     @classmethod
     def validate_source_options(cls, value: dict[str, Any]) -> dict[str, Any]:
         allowed = {
+            "provider",
             "records_path",
             "title_field",
             "id_field",
@@ -199,6 +210,13 @@ class DataSourceCreate(BaseModel):
         unknown = set(value) - allowed
         if unknown:
             raise ValueError(f"Unsupported source options: {', '.join(sorted(unknown))}.")
+        if "provider" in value and value["provider"] not in {
+            "generic",
+            "hubspot",
+            "salesforce",
+            "sap_odata",
+        }:
+            raise ValueError("provider must be generic, hubspot, salesforce or sap_odata.")
         for key in ("records_path", "title_field", "id_field", "next_field"):
             if key in value and not isinstance(value[key], str):
                 raise ValueError(f"{key} must be a string.")

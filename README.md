@@ -1,3 +1,23 @@
+# Agentic Platform · Engineering Proof (October 2026)
+
+**Maturity: local executable reference architecture, not customer-production certification.** This repository was assembled rapidly on 13–14 October 2026 with AI-assisted engineering. That short commit window is part of the experiment in specification-led development, not evidence of long-term operational reliability.
+
+**What you can inspect:** FastAPI runtime, LangGraph orchestration, deterministic evaluations, user-scoped memory, human approval before connector writes, A2A/MCP/Agora interface tests, audit ledger, container Compose, Terraform validation, and deployment preflight policies.
+
+**What you cannot infer:** that a real customer adopted the platform; that optional OIDC/OPA/Vault/managed DB services were fully configured in a live environment; that high availability, restore drills, field SLOs and external interoperability have been independently certified. CI runs validate code and test fixtures, not those claims.
+
+**Independent navigation:**
+- [Decision records and alternatives](docs/architecture-decisions.md)
+- [Evidence-to-claim matrix](docs/public-evidence-matrix.md)
+- [Validation pipeline](.github/workflows/ci.yml)
+- [Integration contracts exercised locally](tests/test_protocol_interop.py)
+- [Fail-closed production prerequisites](app/production_preflight.py)
+- [Latest CI status](https://github.com/jandromani/A2A/actions/workflows/ci.yml)
+
+The case for fast agent-assisted delivery should be evaluated by **specification, diffs, reviews, tests and reported limitations**, not the number or timing of commits. This repository contains code and automated tests; an independently reviewable agent conversation transcript or complete human-review audit log is not published.
+
+---
+
 # Agentic Platform
 
 Implementación ejecutable de la arquitectura del Agentic Atlas: una plataforma común para registrar capacidades, orquestar agentes, conectar herramientas, aplicar permisos, revisar resultados y conservar trazabilidad.
